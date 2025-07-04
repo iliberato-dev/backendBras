@@ -113,15 +113,16 @@ app.get('/get-presencas-total', async (req, res) => {
 
 // Rota para a autenticação (simulada ou real, dependendo da sua lógica)
 // ROTA DE AUTENTICAÇÃO (LOGIN)
+// ... (código anterior) ...
+
+// ROTA DE AUTENTICAÇÃO (LOGIN)
 app.post("/login", async (req, res) => {
-    const { username, password } = req.body;
-    console.log(`Backend: Tentativa de login para usuário: ${username}`);
+    const { username, password } = req.body; // <-- O que exatamente está vindo aqui?
+    console.log(`Backend: Tentativa de login para usuário: "${username}" com senha: "${password}"`); // Adicionei aspas para ver espaços
 
     // --- 1. Tentar Login como Usuário Master (admin) ---
-    // Defina o usuário e RI do admin aqui ou use variáveis de ambiente.
-    // É MELHOR usar variáveis de ambiente no Render para "ADMIN_USERNAME" e "ADMIN_RI".
     const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-    const ADMIN_RI = process.env.ADMIN_RI || 'admin'; // <--- Altere 'admin' para o RI real do admin!
+    const ADMIN_RI = process.env.ADMIN_RI || 'admin';
 
     if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase() && password === ADMIN_RI) {
         console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
@@ -130,25 +131,34 @@ app.post("/login", async (req, res) => {
 
     // --- 2. Tentar Login como Líder da Planilha ---
     try {
-        // Busca a lista de membros/líderes do Apps Script.
-        // A função fetchFromAppsScript já é assíncrona e lida com erros.
         const responseData = await fetchFromAppsScript('getMembros');
-
-        // Verifica se 'membros' ou 'data' existem e são arrays.
         const membros = responseData.membros || responseData.data;
 
         if (!membros || !Array.isArray(membros) || membros.length === 0) {
-            console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script.");
-            return res.status(500).json({ success: false, message: 'Erro: Não foi possível carregar os dados de membros para autenticação.' });
+            console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script (mesmo que JSON ok, array pode estar vazio).");
+            // Se o array 'membros' estiver vazio, isso pode acontecer.
+            return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar os dados de membros ou a lista está vazia.' });
         }
 
-        // Procura pelo líder na lista, ignorando maiúsculas/minúsculas para o nome
-        const liderEncontrado = membros.find(membro =>
-            (membro.Lider && String(membro.Lider).toLowerCase() === String(username).toLowerCase())
-        );
+        // --- Ponto crítico de depuração: O que está em 'membros' ANTES do find? ---
+         console.log("Backend: Membros recebidos do Apps Script (primeiro):", membros[0]);
+         console.log("Backend: Membros recebidos do Apps Script (último):", membros[membros.length -1]);
+         console.log("Backend: Tipo de 'membros':", typeof membros, "É array?", Array.isArray(membros));
+         console.log("Backend: Total de membros:", membros.length);
+
+
+        const liderEncontrado = membros.find(membro => {
+            const liderNaPlanilha = String(membro.Lider || '').toLowerCase(); // Garante string e minúsculas
+            const usernameDigitado = String(username || '').toLowerCase();     // Garante string e minúsculas
+
+            // console.log(`Comparando: '${usernameDigitado}' com '${liderNaPlanilha}'`); // Log de comparação
+            return liderNaPlanilha === usernameDigitado;
+        });
 
         if (liderEncontrado) {
-            // Verifica se o RI fornecido corresponde ao RI do líder encontrado
+             console.log("Líder encontrado:", liderEncontrado); // Log do objeto líder encontrado
+             console.log("RI da Planilha:", String(liderEncontrado.RI), "Senha digitada:", String(password));
+
             if (String(liderEncontrado.RI) === String(password)) {
                 console.log(`Backend: Login bem-sucedido para o líder: ${liderEncontrado.Lider}`);
                 return res.status(200).json({ success: true, message: `Login bem-sucedido, ${liderEncontrado.Lider}!` });
@@ -157,15 +167,18 @@ app.post("/login", async (req, res) => {
                 return res.status(401).json({ success: false, message: 'Senha inválida para o líder fornecido.' });
             }
         } else {
-            console.log(`Backend: Usuário (Líder) não encontrado: ${username}`);
+            console.log(`Backend: Usuário (Líder) não encontrado na lista: ${username}`);
             return res.status(401).json({ success: false, message: 'Usuário (Líder) não encontrado ou credenciais inválidas.' });
         }
 
     } catch (error) {
-        console.error("Backend: Erro ao tentar autenticar líder com Apps Script:", error);
+        // ESTA É A MENSAGEM CRÍTICA NO LOG DO RENDER
+        console.error("Backend: Erro FATAL ao tentar autenticar líder com Apps Script:", error);
         return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.', details: error.message });
     }
 });
+
+// ... (restante do código) ...
 
 
 // Rota simples para verificar se a API está no ar
