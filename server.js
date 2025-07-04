@@ -112,15 +112,58 @@ app.get('/get-presencas-total', async (req, res) => {
 });
 
 // Rota para a autenticação (simulada ou real, dependendo da sua lógica)
-app.post('/login', (req, res) => {
+// ROTA DE AUTENTICAÇÃO (LOGIN)
+app.post("/login", async (req, res) => {
     const { username, password } = req.body;
-    // Autenticação simples (APENAS PARA DEMONSTRAÇÃO)
-    // Em um sistema real, você faria uma consulta a um banco de dados
-    if (username === 'admin' && password === 'admin') {
-        // Em um sistema real, você geraria um token JWT aqui e o enviaria de volta
-        res.json({ success: true, message: 'Login bem-sucedido!' });
-    } else {
-        res.status(401).json({ success: false, message: 'Credenciais inválidas.' });
+    console.log(`Backend: Tentativa de login para usuário: ${username}`);
+
+    // --- 1. Tentar Login como Usuário Master (admin) ---
+    // Defina o usuário e RI do admin aqui ou use variáveis de ambiente.
+    // É MELHOR usar variáveis de ambiente no Render para "ADMIN_USERNAME" e "ADMIN_RI".
+    const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+    const ADMIN_RI = process.env.ADMIN_RI || 'admin'; // <--- Altere 'admin' para o RI real do admin!
+
+    if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase() && password === ADMIN_RI) {
+        console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
+        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!' });
+    }
+
+    // --- 2. Tentar Login como Líder da Planilha ---
+    try {
+        // Busca a lista de membros/líderes do Apps Script.
+        // A função fetchFromAppsScript já é assíncrona e lida com erros.
+        const responseData = await fetchFromAppsScript('getMembros');
+
+        // Verifica se 'membros' ou 'data' existem e são arrays.
+        const membros = responseData.membros || responseData.data;
+
+        if (!membros || !Array.isArray(membros) || membros.length === 0) {
+            console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script.");
+            return res.status(500).json({ success: false, message: 'Erro: Não foi possível carregar os dados de membros para autenticação.' });
+        }
+
+        // Procura pelo líder na lista, ignorando maiúsculas/minúsculas para o nome
+        const liderEncontrado = membros.find(membro =>
+            (membro.Lider && String(membro.Lider).toLowerCase() === String(username).toLowerCase())
+        );
+
+        if (liderEncontrado) {
+            // Verifica se o RI fornecido corresponde ao RI do líder encontrado
+            if (String(liderEncontrado.RI) === String(password)) {
+                console.log(`Backend: Login bem-sucedido para o líder: ${liderEncontrado.Lider}`);
+                return res.status(200).json({ success: true, message: `Login bem-sucedido, ${liderEncontrado.Lider}!` });
+            } else {
+                console.log(`Backend: Senha inválida para o líder: ${username}`);
+                return res.status(401).json({ success: false, message: 'Senha inválida para o líder fornecido.' });
+            }
+        } else {
+            console.log(`Backend: Usuário (Líder) não encontrado: ${username}`);
+            return res.status(401).json({ success: false, message: 'Usuário (Líder) não encontrado ou credenciais inválidas.' });
+        }
+
+    } catch (error) {
+        console.error("Backend: Erro ao tentar autenticar líder com Apps Script:", error);
+        return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.', details: error.message });
     }
 });
 
