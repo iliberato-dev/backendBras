@@ -3,7 +3,7 @@
 require('dotenv').config();
 
 const express = require('express');
-const bodyParser = require('require'); // Correção aqui: deve ser 'body-parser'
+const bodyParser = require('body-parser'); // Correção aqui: deve ser 'body-parser'
 const cors = require('cors');
 const fetch = require('node-fetch'); // Importar node-fetch para ambientes CommonJS
 
