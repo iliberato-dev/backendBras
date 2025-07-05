@@ -34,15 +34,35 @@ app.use(bodyParser.json());
 
 // --- FUNÇÃO UTILITÁRIA PARA REQUISIÇÕES AO APPS SCRIPT ---
 // Centraliza a lógica de chamada ao Apps Script e tratamento de erros
-async function fetchFromAppsScript(actionType, method = 'GET', body = null) {
+async function fetchFromAppsScript(actionType, method = 'GET', body = null, queryParams = {}) {
     if (!APPS_SCRIPT_URL) {
         console.error('Erro de configuração: Variável de ambiente APPS_SCRIPT_URL não definida.');
         throw new Error('Erro de configuração do servidor: URL do Apps Script não definida.');
     }
 
-    // Para POST para o Apps Script, a URL base é usada sem 'tipo' no query param,
-    // pois o Apps Script 'doPost' processa o body diretamente.
-    const url = (method === 'POST' && actionType === 'doPost') ? APPS_SCRIPT_URL : `${APPS_SCRIPT_URL}?tipo=${actionType}`;
+    let url = APPS_SCRIPT_URL;
+    const urlParams = new URLSearchParams();
+
+    // Adiciona o tipo de ação para requisições GET
+    if (method === 'GET') {
+        urlParams.append('tipo', actionType);
+        // Adiciona outros query parameters se existirem
+        for (const key in queryParams) {
+            if (queryParams.hasOwnProperty(key) && queryParams[key]) {
+                urlParams.append(key, queryParams[key]);
+            }
+        }
+        url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
+    } else if (method === 'POST' && actionType === 'doPost') {
+        // Para POST para o Apps Script, a URL base é usada sem 'tipo' no query param,
+        // pois o Apps Script 'doPost' processa o body diretamente.
+        // O `actionType` é apenas um identificador para o log aqui.
+        url = APPS_SCRIPT_URL;
+    } else {
+        // Para outros POSTs que talvez precisem de 'tipo' no query, mas não é o caso atual
+        urlParams.append('tipo', actionType);
+        url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
+    }
     
     const options = {
         method: method,
@@ -127,9 +147,11 @@ app.post('/presenca', async (req, res) => {
 });
 
 // Rota para obter as presenças totais (do Apps Script)
+// Agora passa os query parameters (periodo, lider, gape) para o Apps Script
 app.get('/get-presencas-total', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('presencasTotal');
+        // req.query contém os parâmetros de query da URL (ex: ?periodo=X&lider=Y)
+        const data = await fetchFromAppsScript('presencasTotal', 'GET', null, req.query);
         res.status(200).json(data.data || {}); // Apps Script retorna { success: true, data: {...} }
     } catch (error) {
         console.error('Erro no backend ao obter presenças totais:', error);
@@ -140,7 +162,8 @@ app.get('/get-presencas-total', async (req, res) => {
 // --- NOVA ROTA: Obter a última presença para TODOS os membros ---
 app.get('/get-all-last-presences', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('getAllLastPresences'); // Chama a nova função do Apps Script
+        // Corrigido o actionType para corresponder ao nome da função no Apps Script
+        const data = await fetchFromAppsScript('getLastPresencesForAllMembers'); 
         res.status(200).json(data.data || {}); // Apps Script retorna { success: true, data: {...} }
     } catch (error) {
         console.error('Erro no backend ao obter todas as últimas presenças:', error);
