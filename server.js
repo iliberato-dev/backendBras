@@ -8,7 +8,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const fetch = require('node-fetch');
+const fetch = require('node-fetch'); // Certifique-se de que 'node-fetch' está instalado (npm install node-fetch)
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,10 +16,12 @@ const PORT = process.env.PORT || 3000;
 // --- CONFIGURAÇÃO DE URLs E CORS ---
 // A URL base do seu Google Apps Script Web App.
 // É ESSENCIAL que esta URL venha de uma variável de ambiente no Render (ex: APPS_SCRIPT_URL).
+// Ex: https://script.google.com/macros/s/AKfycbyTmDpB4RGxJ6whSuoydK-PiQ0jOjzvHHXPeVO9Us8587Ldg5NmyZLhykQTLenbGjnA/exec
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 
 // A URL do seu frontend hospedado no Vercel.
 // ESSENCIAL para a segurança do CORS. Deve vir de uma variável de ambiente no Render.
+// Ex: https://seu-frontend.vercel.app
 const FRONTEND_URL = process.env.FRONTEND_URL;
 
 // Configuração do CORS: Permite requisições APENAS da URL do seu frontend (Vercel) e de origens locais.
@@ -34,15 +36,34 @@ app.use(bodyParser.json());
 
 // --- FUNÇÃO UTILITÁRIA PARA REQUISIÇÕES AO APPS SCRIPT ---
 // Centraliza a lógica de chamada ao Apps Script e tratamento de erros
-async function fetchFromAppsScript(actionType, method = 'GET', body = null) {
+// 'path' é o nome da rota esperada pelo Apps Script (ex: 'get-membros', 'get-presencas-total')
+// 'method' é o método HTTP (GET, POST)
+// 'body' é o corpo da requisição para POST
+// 'queryParams' são os parâmetros de consulta para GET (ex: { periodo: 'Manhã' })
+async function fetchFromAppsScript(path, method = 'GET', body = null, queryParams = {}) {
     if (!APPS_SCRIPT_URL) {
         console.error('Erro de configuração: Variável de ambiente APPS_SCRIPT_URL não definida.');
         throw new Error('Erro de configuração do servidor: URL do Apps Script não definida.');
     }
 
-    // Para POST para o Apps Script, a URL base é usada sem 'tipo' no query param,
-    // pois o Apps Script 'doPost' processa o body diretamente.
-    const url = (method === 'POST' && actionType === 'doPost') ? APPS_SCRIPT_URL : `${APPS_SCRIPT_URL}?tipo=${actionType}`;
+    let url = APPS_SCRIPT_URL;
+
+    // CORREÇÃO AQUI: Para requisições GET, anexamos o 'path' diretamente à URL base.
+    // Para POSTs (como o `doPost` que não usa pathInfo), a URL base é suficiente.
+    if (method === 'GET' && path) {
+        url = `${APPS_SCRIPT_URL}/${path}`;
+    }
+    // Se for POST e tiver um path (embora seu doPost não use pathInfo), você pode ajustar se necessário.
+    // Atualmente, seu doPost no Apps Script não lê e.pathInfo, só e.postData.contents.
+    // Então, para doPost, a URL base é correta.
+
+    // Adiciona parâmetros de consulta, se houver
+    const params = new URLSearchParams(queryParams).toString();
+    if (params) {
+        url += `?${params}`;
+    }
+    
+    console.log(`Backend: Encaminhando ${method} para Apps Script: ${url}`); // Log da URL completa
     
     const options = {
         method: method,
@@ -52,8 +73,6 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null) {
         options.body = JSON.stringify(body);
     }
 
-    console.log(`Backend: Encaminhando ${method} para Apps Script: ${url}`);
-    
     const response = await fetch(url, options);
     const responseText = await response.text();
 
@@ -61,20 +80,16 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null) {
     try {
         responseData = JSON.parse(responseText);
     } catch (e) {
-        // Se a resposta não for um JSON válido, loga e tenta criar um objeto de erro
         console.error(`Backend: Erro ao parsear JSON do Apps Script: ${e.message}. Resposta bruta: ${responseText}`);
         responseData = { success: false, message: `Resposta inválida do Apps Script: ${responseText.substring(0, 100)}...`, details: e.message };
     }
 
-    // O Apps Script agora sempre retorna { success: true/false, ... }
-    // então a verificação de !response.ok é para erros HTTP, e responseData.success para erros lógicos.
     if (!response.ok || responseData.success === false) {
-        console.error(`Backend: Erro lógico/HTTP do Apps Script (${actionType} ${method}): Status ${response.status} - Resposta: ${JSON.stringify(responseData)}`);
-        // Lança o erro com a mensagem do Apps Script para ser capturada e repassada pelo backend
+        console.error(`Backend: Erro lógico/HTTP do Apps Script (${path || 'doPost'} ${method}): Status ${response.status} - Resposta: ${JSON.stringify(responseData)}`);
         throw new Error(responseData.message || 'Erro desconhecido do Apps Script.');
     }
     
-    console.log(`Backend: Resposta bem-sucedida do Apps Script (${actionType} ${method}): ${JSON.stringify(responseData)}`);
+    console.log(`Backend: Resposta bem-sucedida do Apps Script (${path || 'doPost'} ${method}): ${JSON.stringify(responseData)}`);
     return responseData;
 }
 
@@ -83,7 +98,8 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null) {
 // Rota para obter a lista de membros
 app.get('/get-membros', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('getMembros');
+        // Alinhado com o 'case 'get-membros':' no Apps Script doGet
+        const data = await fetchFromAppsScript('get-membros'); // CORREÇÃO: Passa o path como primeiro argumento
         res.status(200).json(data);
     } catch (error) {
         console.error('Erro no backend ao obter membros:', error);
@@ -98,30 +114,21 @@ app.post('/presenca', async (req, res) => {
         return res.status(400).json({ success: false, message: 'Dados incompletos para registrar presença.' });
     }
     try {
-        // Chama a função `doPost` do Apps Script.
-        // O Apps Script `doPost` já retorna { success: true } ou { success: false, message: "já registrada" }
+        // Para POST, 'doPost' é o path lógico, mas a URL não usa pathInfo no Apps Script
         const responseData = await fetchFromAppsScript('doPost', 'POST', { nome, data, hora, sheet });
         
-        // Se a resposta do Apps Script indica sucesso ou "já registrada", repassa para o frontend
         res.status(200).json(responseData);
     } catch (error) {
-        // Se o `fetchFromAppsScript` lançou um erro, isso significa que o Apps Script
-        // retornou `success: false` por algum motivo (inclusive "já registrada")
-        // ou houve um erro HTTP/parse JSON.
         console.error('Erro no backend ao registrar presença:', error);
 
-        // Verifica se a mensagem de erro contém a frase "já foi registrada"
         if (error.message && error.message.includes("já foi registrada")) {
-            // Repassa a mensagem de "já registrada" com success: false para o frontend
-            return res.status(200).json({ // Retorna 200 OK, mas com success: false para indicar aviso
+            return res.status(200).json({
                 success: false,
-                message: error.message, // A mensagem já deve vir do Apps Script
-                // Se o Apps Script retornasse lastPresence no erro, você poderia repassar aqui
-                lastPresence: { data: data, hora: hora } // Placeholder, idealmente viria do Apps Script
+                message: error.message,
+                lastPresence: { data: data, hora: hora } // Placeholder
             });
         }
         
-        // Para outros erros, retorna status 500
         res.status(500).json({ success: false, message: 'Erro ao registrar presença.', details: error.message });
     }
 });
@@ -129,7 +136,9 @@ app.post('/presenca', async (req, res) => {
 // Rota para obter as presenças totais (do Apps Script)
 app.get('/get-presencas-total', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('presencasTotal');
+        // req.query contém os filtros (periodo, lider, gape)
+        // Alinhado com o 'case 'get-presencas-total':' no Apps Script doGet
+        const data = await fetchFromAppsScript('get-presencas-total', 'GET', null, req.query); // CORREÇÃO: Passa o path e queryParams
         res.status(200).json(data.data || {}); // Apps Script retorna { success: true, data: {...} }
     } catch (error) {
         console.error('Erro no backend ao obter presenças totais:', error);
@@ -140,7 +149,8 @@ app.get('/get-presencas-total', async (req, res) => {
 // --- NOVA ROTA: Obter a última presença para TODOS os membros ---
 app.get('/get-all-last-presences', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('getAllLastPresences'); // Chama a nova função do Apps Script
+        // Alinhado com o 'case 'get-all-last-presences':' no Apps Script doGet
+        const data = await fetchFromAppsScript('get-all-last-presences'); // CORREÇÃO: Passa o path
         res.status(200).json(data.data || {}); // Apps Script retorna { success: true, data: {...} }
     } catch (error) {
         console.error('Erro no backend ao obter todas as últimas presenças:', error);
@@ -162,8 +172,9 @@ app.post("/login", async (req, res) => {
     }
 
     try {
-        const responseData = await fetchFromAppsScript('getMembros');
-        const membros = responseData.membros || []; // Apps Script agora retorna { success: true, membros: [...] }
+        // Alinhado com o 'case 'get-membros':' no Apps Script doGet
+        const responseData = await fetchFromAppsScript('get-membros'); // CORREÇÃO: Passa o path
+        const membros = responseData.membros || [];
 
         if (!membros || !Array.isArray(membros) || membros.length === 0) {
             console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script ou a lista está vazia.");
