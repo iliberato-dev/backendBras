@@ -196,11 +196,15 @@ app.post("/login", async (req, res) => {
             return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar os dados de membros ou a lista está vazia para autenticação.' });
         }
 
-        // Tenta encontrar o membro pelo 'Nome Membro'
+        const usernameDigitado = String(username || '').toLowerCase().trim();
+
+        // Tenta encontrar o membro pelo 'Nome Membro' (primeiro nome ou nome completo)
         const membroEncontradoPeloNome = membros.find(membro => {
             const nomeMembroNaPlanilha = String(membro.Nome || '').toLowerCase().trim();
-            const usernameDigitado = String(username || '').toLowerCase().trim();
-            return nomeMembroNaPlanilha === usernameDigitado;
+            const firstWordOfMemberName = nomeMembroNaPlanilha.split(' ')[0];
+
+            // Verifica se o username digitado é o nome completo OU o primeiro nome do membro
+            return nomeMembroNaPlanilha === usernameDigitado || firstWordOfMemberName === usernameDigitado;
         });
 
         if (membroEncontradoPeloNome) {
@@ -210,7 +214,11 @@ app.post("/login", async (req, res) => {
                 const isAlsoALider = membros.some(membro => {
                     const liderNaPlanilha = String(membro.Lider || '').toLowerCase().trim();
                     const nomeMembroLogando = String(membroEncontradoPeloNome.Nome || '').toLowerCase().trim();
-                    return liderNaPlanilha === nomeMembroLogando;
+                    
+                    // Verifica se o nome completo do membro que está a logar é um líder
+                    // ou se o primeiro nome do membro que está a logar é um líder
+                    const firstWordOfLider = liderNaPlanilha.split(' ')[0];
+                    return liderNaPlanilha === nomeMembroLogando || firstWordOfLider === nomeMembroLogando;
                 });
 
                 if (isAlsoALider) {
