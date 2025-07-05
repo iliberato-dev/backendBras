@@ -179,37 +179,54 @@ app.post("/login", async (req, res) => {
     const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
     const ADMIN_RI = process.env.ADMIN_RI || 'admin';
 
+    // 1. Tenta autenticar como administrador
     if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase() && password === ADMIN_RI) {
         console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
         return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!' });
     }
 
+    // 2. Se não for administrador, tenta autenticar como líder
     try {
+        // Obtém a lista de membros do Apps Script para verificar credenciais
         const responseData = await fetchFromAppsScript('getMembros');
-        const membros = responseData.membros || []; // Apps Script agora retorna { success: true, membros: [...] }
+        const membros = responseData.membros || []; // Apps Script retorna { success: true, membros: [...] }
 
         if (!membros || !Array.isArray(membros) || membros.length === 0) {
-            console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script ou a lista está vazia.");
+            console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script ou a lista está vazia para autenticação.");
             return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar os dados de membros ou a lista está vazia para autenticação.' });
         }
 
-        const liderEncontrado = membros.find(membro => {
-            const liderNaPlanilha = String(membro.Lider || '').toLowerCase().trim();
+        // Tenta encontrar o membro pelo 'Nome Membro'
+        const membroEncontradoPeloNome = membros.find(membro => {
+            const nomeMembroNaPlanilha = String(membro.Nome || '').toLowerCase().trim();
             const usernameDigitado = String(username || '').toLowerCase().trim();
-            return liderNaPlanilha === usernameDigitado;
+            return nomeMembroNaPlanilha === usernameDigitado;
         });
 
-        if (liderEncontrado) {
-            if (String(liderEncontrado.RI).trim() === String(password).trim()) {
-                console.log(`Backend: Login bem-sucedido para o líder: ${liderEncontrado.Lider}`);
-                return res.status(200).json({ success: true, message: `Login bem-sucedido, ${liderEncontrado.Lider}!` });
+        if (membroEncontradoPeloNome) {
+            // Se o membro foi encontrado pelo Nome Membro, verifica a senha (RI)
+            if (String(membroEncontradoPeloNome.RI).trim() === String(password).trim()) {
+                // Agora, verifica se este 'Nome Membro' também aparece como 'Lider' em qualquer registro
+                const isAlsoALider = membros.some(membro => {
+                    const liderNaPlanilha = String(membro.Lider || '').toLowerCase().trim();
+                    const nomeMembroLogando = String(membroEncontradoPeloNome.Nome || '').toLowerCase().trim();
+                    return liderNaPlanilha === nomeMembroLogando;
+                });
+
+                if (isAlsoALider) {
+                    console.log(`Backend: Login bem-sucedido para o líder (Nome Membro e Lider): ${membroEncontradoPeloNome.Nome}`);
+                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!` });
+                } else {
+                    console.log(`Backend: Usuário '${username}' encontrado e senha correta, mas não está listado como Líder.`);
+                    return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.' });
+                }
             } else {
-                console.log(`Backend: Senha inválida para o líder: ${username}`);
-                return res.status(401).json({ success: false, message: 'Senha inválida para o líder fornecido.' });
+                console.log(`Backend: Senha inválida para o usuário: ${username}`);
+                return res.status(401).json({ success: false, message: 'Senha inválida.' });
             }
         } else {
-            console.log(`Backend: Usuário (Líder) não encontrado na lista: ${username}`);
-            return res.status(401).json({ success: false, message: 'Usuário (Líder) não encontrado ou credenciais inválidas.' });
+            console.log(`Backend: Usuário '${username}' não encontrado na lista de membros.`);
+            return res.status(401).json({ success: false, message: 'Usuário não encontrado ou credenciais inválidas.' });
         }
 
     } catch (error) {
