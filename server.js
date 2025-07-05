@@ -8,7 +8,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const fetch = require('node-fetch'); 
+const fetch = require('node-fetch');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,9 +24,9 @@ const FRONTEND_URL = process.env.FRONTEND_URL;
 
 // Configuração do CORS: Permite requisições APENAS da URL do seu frontend (Vercel) e de origens locais.
 app.use(cors({
-    origin: FRONTEND_URL, 
-    methods: ['GET', 'POST', 'PUT', 'DELETE'], 
-    allowedHeaders: ['Content-Type', 'Authorization'], 
+    origin: FRONTEND_URL,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 // Middleware para parsear o corpo das requisições JSON
@@ -36,10 +36,13 @@ app.use(bodyParser.json());
 // Centraliza a lógica de chamada ao Apps Script e tratamento de erros
 async function fetchFromAppsScript(actionType, method = 'GET', body = null) {
     if (!APPS_SCRIPT_URL) {
-        throw new Error('Erro de configuração do servidor: URL do Apps Script não definida na variável de ambiente APPS_SCRIPT_URL.');
+        console.error('Erro de configuração: Variável de ambiente APPS_SCRIPT_URL não definida.');
+        throw new Error('Erro de configuração do servidor: URL do Apps Script não definida.');
     }
 
-    const url = `${APPS_SCRIPT_URL}?tipo=${actionType}`;
+    // Para POST para o Apps Script, a URL base é usada sem 'tipo' no query param,
+    // pois o Apps Script 'doPost' processa o body diretamente.
+    const url = (method === 'POST' && actionType === 'doPost') ? APPS_SCRIPT_URL : `${APPS_SCRIPT_URL}?tipo=${actionType}`;
     
     const options = {
         method: method,
@@ -52,19 +55,26 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null) {
     console.log(`Backend: Encaminhando ${method} para Apps Script: ${url}`);
     
     const response = await fetch(url, options);
-    const responseText = await response.text(); 
+    const responseText = await response.text();
 
     let responseData;
     try {
         responseData = JSON.parse(responseText);
     } catch (e) {
-        responseData = { message: responseText };
+        // Se a resposta não for um JSON válido, loga e tenta criar um objeto de erro
+        console.error(`Backend: Erro ao parsear JSON do Apps Script: ${e.message}. Resposta bruta: ${responseText}`);
+        responseData = { success: false, message: `Resposta inválida do Apps Script: ${responseText.substring(0, 100)}...`, details: e.message };
     }
 
-    if (!response.ok || (responseData.error && responseData.message?.startsWith('Erro:'))) {
-        console.error(`Erro do Apps Script (${actionType} ${method}): ${response.status} - ${JSON.stringify(responseData)}`);
-        throw new Error(`Erro Apps Script: ${responseData.message || responseData.error || responseText}`);
+    // O Apps Script agora sempre retorna { success: true/false, ... }
+    // então a verificação de !response.ok é para erros HTTP, e responseData.success para erros lógicos.
+    if (!response.ok || responseData.success === false) {
+        console.error(`Backend: Erro lógico/HTTP do Apps Script (${actionType} ${method}): Status ${response.status} - Resposta: ${JSON.stringify(responseData)}`);
+        // Lança o erro com a mensagem do Apps Script para ser capturada e repassada pelo backend
+        throw new Error(responseData.message || 'Erro desconhecido do Apps Script.');
     }
+    
+    console.log(`Backend: Resposta bem-sucedida do Apps Script (${actionType} ${method}): ${JSON.stringify(responseData)}`);
     return responseData;
 }
 
@@ -73,7 +83,7 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null) {
 // Rota para obter a lista de membros
 app.get('/get-membros', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('getMembros'); 
+        const data = await fetchFromAppsScript('getMembros');
         res.status(200).json(data);
     } catch (error) {
         console.error('Erro no backend ao obter membros:', error);
@@ -84,14 +94,34 @@ app.get('/get-membros', async (req, res) => {
 // Rota para registrar a presença
 app.post('/presenca', async (req, res) => {
     const { nome, data, hora, sheet } = req.body;
-    if (!nome || !data || !hora || !sheet) { 
+    if (!nome || !data || !hora || !sheet) {
         return res.status(400).json({ success: false, message: 'Dados incompletos para registrar presença.' });
     }
     try {
-        const responseData = await fetchFromAppsScript('doPost', 'POST', { nome, data, hora, sheet }); // O Apps Script doPost espera a action diretamente
-        res.status(200).json(responseData); 
+        // Chama a função `doPost` do Apps Script.
+        // O Apps Script `doPost` já retorna { success: true } ou { success: false, message: "já registrada" }
+        const responseData = await fetchFromAppsScript('doPost', 'POST', { nome, data, hora, sheet });
+        
+        // Se a resposta do Apps Script indica sucesso ou "já registrada", repassa para o frontend
+        res.status(200).json(responseData);
     } catch (error) {
+        // Se o `fetchFromAppsScript` lançou um erro, isso significa que o Apps Script
+        // retornou `success: false` por algum motivo (inclusive "já registrada")
+        // ou houve um erro HTTP/parse JSON.
         console.error('Erro no backend ao registrar presença:', error);
+
+        // Verifica se a mensagem de erro contém a frase "já foi registrada"
+        if (error.message && error.message.includes("já foi registrada")) {
+            // Repassa a mensagem de "já registrada" com success: false para o frontend
+            return res.status(200).json({ // Retorna 200 OK, mas com success: false para indicar aviso
+                success: false,
+                message: error.message, // A mensagem já deve vir do Apps Script
+                // Se o Apps Script retornasse lastPresence no erro, você poderia repassar aqui
+                lastPresence: { data: data, hora: hora } // Placeholder, idealmente viria do Apps Script
+            });
+        }
+        
+        // Para outros erros, retorna status 500
         res.status(500).json({ success: false, message: 'Erro ao registrar presença.', details: error.message });
     }
 });
@@ -99,8 +129,8 @@ app.post('/presenca', async (req, res) => {
 // Rota para obter as presenças totais (do Apps Script)
 app.get('/get-presencas-total', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('presencasTotal'); 
-        res.status(200).json(data);
+        const data = await fetchFromAppsScript('presencasTotal');
+        res.status(200).json(data.data || {}); // Apps Script retorna { success: true, data: {...} }
     } catch (error) {
         console.error('Erro no backend ao obter presenças totais:', error);
         res.status(500).json({ success: false, message: 'Erro ao obter presenças totais.', details: error.message });
@@ -111,7 +141,7 @@ app.get('/get-presencas-total', async (req, res) => {
 app.get('/get-all-last-presences', async (req, res) => {
     try {
         const data = await fetchFromAppsScript('getAllLastPresences'); // Chama a nova função do Apps Script
-        res.status(200).json(data); 
+        res.status(200).json(data.data || {}); // Apps Script retorna { success: true, data: {...} }
     } catch (error) {
         console.error('Erro no backend ao obter todas as últimas presenças:', error);
         res.status(500).json({ success: false, message: 'Erro ao obter últimas presenças de todos os membros.', details: error.message });
@@ -124,7 +154,7 @@ app.post("/login", async (req, res) => {
     console.log(`Backend: Tentativa de login para usuário: "${username}" com senha: "${password}"`);
 
     const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-    const ADMIN_RI = process.env.ADMIN_RI || 'admin'; 
+    const ADMIN_RI = process.env.ADMIN_RI || 'admin';
 
     if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase() && password === ADMIN_RI) {
         console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
@@ -132,8 +162,8 @@ app.post("/login", async (req, res) => {
     }
 
     try {
-        const responseData = await fetchFromAppsScript('getMembros'); 
-        const membros = responseData.membros || responseData.data; 
+        const responseData = await fetchFromAppsScript('getMembros');
+        const membros = responseData.membros || []; // Apps Script agora retorna { success: true, membros: [...] }
 
         if (!membros || !Array.isArray(membros) || membros.length === 0) {
             console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script ou a lista está vazia.");
@@ -141,13 +171,13 @@ app.post("/login", async (req, res) => {
         }
 
         const liderEncontrado = membros.find(membro => {
-            const liderNaPlanilha = String(membro.Lider || '').toLowerCase().trim(); 
+            const liderNaPlanilha = String(membro.Lider || '').toLowerCase().trim();
             const usernameDigitado = String(username || '').toLowerCase().trim();
             return liderNaPlanilha === usernameDigitado;
         });
 
         if (liderEncontrado) {
-            if (String(liderEncontrado.RI).trim() === String(password).trim()) { 
+            if (String(liderEncontrado.RI).trim() === String(password).trim()) {
                 console.log(`Backend: Login bem-sucedido para o líder: ${liderEncontrado.Lider}`);
                 return res.status(200).json({ success: true, message: `Login bem-sucedido, ${liderEncontrado.Lider}!` });
             } else {
