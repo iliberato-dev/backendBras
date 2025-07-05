@@ -190,6 +190,8 @@ app.post("/login", async (req, res) => {
         // Obtém a lista de membros do Apps Script para verificar credenciais
         const responseData = await fetchFromAppsScript('getMembros');
         const membros = responseData.membros || []; // Apps Script retorna { success: true, membros: [...] }
+        console.log(`Backend Login: Membros recebidos do Apps Script: ${JSON.stringify(membros.map(m => m.Nome))}`); // Log dos nomes dos membros
+        console.log(`Backend Login: Username digitado (normalizado): '${username.toLowerCase().trim()}'`);
 
         if (!membros || !Array.isArray(membros) || membros.length === 0) {
             console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script ou a lista está vazia para autenticação.");
@@ -203,22 +205,28 @@ app.post("/login", async (req, res) => {
             const nomeMembroNaPlanilha = String(membro.Nome || '').toLowerCase().trim();
             const firstWordOfMemberName = nomeMembroNaPlanilha.split(' ')[0];
 
+            console.log(`Backend Login: Comparando '${usernameDigitado}' com Nome Membro: '${nomeMembroNaPlanilha}' e Primeiro Nome: '${firstWordOfMemberName}'`);
+
             // Verifica se o username digitado é o nome completo OU o primeiro nome do membro
             return nomeMembroNaPlanilha === usernameDigitado || firstWordOfMemberName === usernameDigitado;
         });
 
         if (membroEncontradoPeloNome) {
+            console.log(`Backend Login: Membro encontrado pelo nome: ${membroEncontradoPeloNome.Nome}`);
             // Se o membro foi encontrado pelo Nome Membro, verifica a senha (RI)
             if (String(membroEncontradoPeloNome.RI).trim() === String(password).trim()) {
+                console.log(`Backend Login: Senha (RI) correta para ${membroEncontradoPeloNome.Nome}.`);
                 // Agora, verifica se este 'Nome Membro' também aparece como 'Lider' em qualquer registro
+                const nomeMembroLogando = String(membroEncontradoPeloNome.Nome || '').toLowerCase().trim();
+                console.log(`Backend Login: Verificando se '${nomeMembroLogando}' é um líder...`);
+
                 const isAlsoALider = membros.some(membro => {
                     const liderNaPlanilha = String(membro.Lider || '').toLowerCase().trim();
-                    const nomeMembroLogando = String(membroEncontradoPeloNome.Nome || '').toLowerCase().trim();
-                    
-                    // Verifica se o nome completo do membro que está a logar é um líder
-                    // ou se o primeiro nome do membro que está a logar é um líder
                     const firstWordOfLider = liderNaPlanilha.split(' ')[0];
-                    return liderNaPlanilha === nomeMembroLogando || firstWordOfLider === nomeMembroLogando;
+                    
+                    const match = liderNaPlanilha === nomeMembroLogando || firstWordOfLider === nomeMembroLogando;
+                    console.log(`Backend Login: Comparando '${nomeMembroLogando}' com Lider: '${liderNaPlanilha}' (Primeiro Nome Lider: '${firstWordOfLider}'). Match: ${match}`);
+                    return match;
                 });
 
                 if (isAlsoALider) {
