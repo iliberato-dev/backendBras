@@ -141,7 +141,6 @@ app.post('/presenca', async (req, res) => {
             });
         }
         
-        // Para outros erros, retorna status 500
         res.status(500).json({ success: false, message: 'Erro ao registrar presença.', details: error.message });
     }
 });
@@ -220,31 +219,63 @@ app.post("/login", async (req, res) => {
             if (String(membroEncontradoPeloNome.RI).trim() === String(password).trim()) {
                 console.log(`Backend Login: Senha (RI) correta para ${membroEncontradoPeloNome.Nome}.`);
                 
-                // *** LÓGICA DE LÍDER AJUSTADA: Prioriza a coluna 'Grupo Líder' ***
                 const cargoMembro = String(membroEncontradoPeloNome.Cargo || '').toLowerCase().trim();
                 const statusMembro = String(membroEncontradoPeloNome.Status || '').toLowerCase().trim();
-                const liderNaPlanilhaCompleto = String(membroEncontradoPeloNome.Lider || '').toLowerCase().trim();
-
+                
                 let isLeaderByRole = false;
 
-                // Tenta extrair o nome do líder da coluna 'Grupo Líder'
-                const prefixoGrupoLider = '01 - sede | '; // Assumindo este prefixo fixo
-                let nomeLiderExtraidoDoGrupo = '';
-
-                if (liderNaPlanilhaCompleto.startsWith(prefixoGrupoLider)) {
-                    nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto.substring(prefixoGrupoLider.length).trim();
-                } else {
-                    // Se o formato não tiver o prefixo, assume que o campo já é o nome do líder
-                    nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto;
+                // 1. Verifica se o Cargo ou Status do próprio membro indica liderança
+                if (cargoMembro.includes('líder') || statusMembro.includes('líder')) {
+                    isLeaderByRole = true;
+                    console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' é líder por Cargo/Status.`);
                 }
 
-                // Verifica se o nome extraído do 'Grupo Líder' corresponde ao username que está a fazer login
-                // Ou se o Cargo/Status contém a palavra 'líder'
-                isLeaderByRole = (nomeLiderExtraidoDoGrupo === usernameDigitado) ||
-                                 cargoMembro.includes('líder') || 
-                                 statusMembro.includes('líder');
+                // 2. Verificação adicional: Se o membro não foi identificado como líder por Cargo/Status,
+                // verifica se o nome do membro aparece como líder em qualquer 'Grupo Líder'
+                if (!isLeaderByRole) { 
+                    const nomeDoMembroLogando = String(membroEncontradoPeloNome.Nome || '').toLowerCase().trim();
+                    console.log(`Backend Login: Verificando se '${nomeDoMembroLogando}' aparece como líder em algum grupo...`);
+
+                    isLeaderByRole = membros.some(anyMember => {
+                        const liderNaPlanilhaCompleto = String(anyMember.Lider || '').toLowerCase().trim();
+                        const congregacaoAnyMember = String(anyMember.Congregacao || '').toLowerCase().trim();
+
+                        let nomeLiderExtraidoDoGrupo = '';
+                        const dynamicPrefix = congregacaoAnyMember ? `${congregacaoAnyMember} | `.toLowerCase() : '';
+
+                        if (dynamicPrefix && liderNaPlanilhaCompleto.startsWith(dynamicPrefix)) {
+                            nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto.substring(dynamicPrefix.length).trim();
+                        } else {
+                            nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto;
+                        }
+
+                        // --- LÓGICA DE FUZZY MATCHING PARA NOMES DE LÍDERES ---
+                        // Permite que "Alessandro Nasc" (do Grupo Líder) corresponda a "Alessandro Nascimento" (nome do membro logando)
+                        const loggingMemberWords = nomeDoMembroLogando.split(' ').filter(word => word.length > 0);
+                        const extractedLeaderWords = nomeLiderExtraidoDoGrupo.split(' ').filter(word => word.length > 0);
+
+                        let isFuzzyMatch = false;
+
+                        if (loggingMemberWords.length > 0 && extractedLeaderWords.length > 0) {
+                            // Decide qual array de palavras é o mais curto e qual é o mais longo
+                            const [shorterArr, longerArr] = loggingMemberWords.length <= extractedLeaderWords.length ?
+                                [loggingMemberWords, extractedLeaderWords] :
+                                [extractedLeaderWords, loggingMemberWords];
+
+                            // Verifica se cada palavra do array mais curto é um prefixo da palavra correspondente no array mais longo
+                            // Isso permite correspondências como "Nasc" sendo prefixo de "Nascimento"
+                            isFuzzyMatch = shorterArr.every((sWord, index) => {
+                                // Garante que a palavra correspondente no array mais longo exista
+                                return longerArr[index] && longerArr[index].startsWith(sWord);
+                            });
+                        }
+                        
+                        console.log(`Backend Login:   Comparando '${nomeDoMembroLogando}' com líder extraído: '${nomeLiderExtraidoDoGrupo}'. Fuzzy Match: ${isFuzzyMatch}`);
+                        return isFuzzyMatch;
+                    });
+                }
                 
-                console.log(`Backend Login: Cargo do membro: '${cargoMembro}', Status do membro: '${statusMembro}', Grupo Líder na planilha: '${liderNaPlanilhaCompleto}', Nome Líder Extraído: '${nomeLiderExtraidoDoGrupo}'. É líder? ${isLeaderByRole}`);
+                console.log(`Backend Login: Resultado final - É líder? ${isLeaderByRole}`);
 
                 if (isLeaderByRole) {
                     console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontradoPeloNome.Nome}`);
