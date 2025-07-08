@@ -181,7 +181,8 @@ app.post("/login", async (req, res) => {
     // 1. Tenta autenticar como administrador
     if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase() && password === ADMIN_RI) {
         console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
-        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!' });
+        // Inclui o nome do líder na resposta de sucesso
+        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: username });
     }
 
     // 2. Se não for administrador, tenta autenticar como líder
@@ -279,7 +280,8 @@ app.post("/login", async (req, res) => {
 
                 if (isLeaderByRole) {
                     console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontradoPeloNome.Nome}`);
-                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!` });
+                    // Inclui o nome do líder na resposta de sucesso
+                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!`, leaderName: membroEncontradoPeloNome.Nome });
                 } else {
                     console.log(`Backend: Usuário '${username}' encontrado e senha correta, mas não tem o cargo/status de Líder.`);
                     return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.' });
@@ -308,4 +310,4 @@ app.get('/status', (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     console.log(`CORS configurado para permitir requisições de: ${FRONTEND_URL}`);
-});
+})
