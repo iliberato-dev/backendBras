@@ -199,16 +199,19 @@ app.post("/login", async (req, res) => {
         }
 
         const usernameDigitado = String(username || '').toLowerCase().trim();
+        const usernameWords = usernameDigitado.split(' ').filter(word => word.length > 0); // Divide o username em palavras, ignorando vazias
 
-        // Tenta encontrar o membro pelo 'Nome Membro' (primeiro nome ou nome completo)
+        // Tenta encontrar o membro pelo 'Nome Membro'
         const membroEncontradoPeloNome = membros.find(membro => {
             const nomeMembroNaPlanilha = String(membro.Nome || '').toLowerCase().trim();
-            const firstWordOfMemberName = nomeMembroNaPlanilha.split(' ')[0];
+            
+            console.log(`Backend Login: Comparando username '${usernameDigitado}' com Nome Membro: '${nomeMembroNaPlanilha}'`);
 
-            console.log(`Backend Login: Comparando '${usernameDigitado}' com Nome Membro: '${nomeMembroNaPlanilha}' e Primeiro Nome: '${firstWordOfMemberName}'`);
-
-            // Verifica se o username digitado é o nome completo OU o primeiro nome do membro
-            return nomeMembroNaPlanilha === usernameDigitado || firstWordOfMemberName === usernameDigitado;
+            // Verifica se o nome completo do membro na planilha contém todas as palavras do username digitado
+            // na ordem. Ex: "ademir martins" deve corresponder a "ademir martins de santana"
+            const allWordsMatch = usernameWords.every(word => nomeMembroNaPlanilha.includes(word));
+            
+            return allWordsMatch;
         });
 
         if (membroEncontradoPeloNome) {
@@ -216,24 +219,22 @@ app.post("/login", async (req, res) => {
             // Se o membro foi encontrado pelo Nome Membro, verifica a senha (RI)
             if (String(membroEncontradoPeloNome.RI).trim() === String(password).trim()) {
                 console.log(`Backend Login: Senha (RI) correta para ${membroEncontradoPeloNome.Nome}.`);
-                // Agora, verifica se este 'Nome Membro' também aparece como 'Lider' em qualquer registro
-                const nomeMembroLogando = String(membroEncontradoPeloNome.Nome || '').toLowerCase().trim();
-                console.log(`Backend Login: Verificando se '${nomeMembroLogando}' é um líder...`);
+                
+                // *** LÓGICA DE LÍDER CORRIGIDA ***
+                // Agora, verifica se o 'Cargo' (ou 'Status') do próprio membro indica que ele é um líder.
+                const cargoMembro = String(membroEncontradoPeloNome.Cargo || '').toLowerCase().trim();
+                const statusMembro = String(membroEncontradoPeloNome.Status || '').toLowerCase().trim();
 
-                const isAlsoALider = membros.some(membro => {
-                    const liderNaPlanilha = String(membro.Lider || '').toLowerCase().trim();
-                    const firstWordOfLider = liderNaPlanilha.split(' ')[0];
-                    
-                    const match = liderNaPlanilha === nomeMembroLogando || firstWordOfLider === nomeMembroLogando;
-                    console.log(`Backend Login: Comparando '${nomeMembroLogando}' com Lider: '${liderNaPlanilha}' (Primeiro Nome Lider: '${firstWordOfLider}'). Match: ${match}`);
-                    return match;
-                });
+                // Assumindo que "Líder" é uma palavra-chave para identificar um líder no campo Cargo ou Status
+                const isLeaderByRole = cargoMembro.includes('líder') || statusMembro.includes('líder'); 
+                
+                console.log(`Backend Login: Cargo do membro: '${cargoMembro}', Status do membro: '${statusMembro}'. É líder? ${isLeaderByRole}`);
 
-                if (isAlsoALider) {
-                    console.log(`Backend: Login bem-sucedido para o líder (Nome Membro e Lider): ${membroEncontradoPeloNome.Nome}`);
+                if (isLeaderByRole) {
+                    console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontradoPeloNome.Nome}`);
                     return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!` });
                 } else {
-                    console.log(`Backend: Usuário '${username}' encontrado e senha correta, mas não está listado como Líder.`);
+                    console.log(`Backend: Usuário '${username}' encontrado e senha correta, mas não tem o cargo/status de Líder.`);
                     return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.' });
                 }
             } else {
