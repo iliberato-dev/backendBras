@@ -220,15 +220,31 @@ app.post("/login", async (req, res) => {
             if (String(membroEncontradoPeloNome.RI).trim() === String(password).trim()) {
                 console.log(`Backend Login: Senha (RI) correta para ${membroEncontradoPeloNome.Nome}.`);
                 
-                // *** LÓGICA DE LÍDER CORRIGIDA ***
-                // Agora, verifica se o 'Cargo' (ou 'Status') do próprio membro indica que ele é um líder.
+                // *** LÓGICA DE LÍDER AJUSTADA: Prioriza a coluna 'Grupo Líder' ***
                 const cargoMembro = String(membroEncontradoPeloNome.Cargo || '').toLowerCase().trim();
                 const statusMembro = String(membroEncontradoPeloNome.Status || '').toLowerCase().trim();
+                const liderNaPlanilhaCompleto = String(membroEncontradoPeloNome.Lider || '').toLowerCase().trim();
 
-                // Assumindo que "Líder" é uma palavra-chave para identificar um líder no campo Cargo ou Status
-                const isLeaderByRole = cargoMembro.includes('líder') || statusMembro.includes('líder'); 
+                let isLeaderByRole = false;
+
+                // Tenta extrair o nome do líder da coluna 'Grupo Líder'
+                const prefixoGrupoLider = '01 - sede | '; // Assumindo este prefixo fixo
+                let nomeLiderExtraidoDoGrupo = '';
+
+                if (liderNaPlanilhaCompleto.startsWith(prefixoGrupoLider)) {
+                    nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto.substring(prefixoGrupoLider.length).trim();
+                } else {
+                    // Se o formato não tiver o prefixo, assume que o campo já é o nome do líder
+                    nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto;
+                }
+
+                // Verifica se o nome extraído do 'Grupo Líder' corresponde ao username que está a fazer login
+                // Ou se o Cargo/Status contém a palavra 'líder'
+                isLeaderByRole = (nomeLiderExtraidoDoGrupo === usernameDigitado) ||
+                                 cargoMembro.includes('líder') || 
+                                 statusMembro.includes('líder');
                 
-                console.log(`Backend Login: Cargo do membro: '${cargoMembro}', Status do membro: '${statusMembro}'. É líder? ${isLeaderByRole}`);
+                console.log(`Backend Login: Cargo do membro: '${cargoMembro}', Status do membro: '${statusMembro}', Grupo Líder na planilha: '${liderNaPlanilhaCompleto}', Nome Líder Extraído: '${nomeLiderExtraidoDoGrupo}'. É líder? ${isLeaderByRole}`);
 
                 if (isLeaderByRole) {
                     console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontradoPeloNome.Nome}`);
