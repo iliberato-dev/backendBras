@@ -162,7 +162,7 @@ app.get('/get-presencas-total', async (req, res) => {
 app.get('/get-all-last-presences', async (req, res) => {
     try {
         // CORRIGIDO o actionType para corresponder ao nome da função no Apps Script
-        const data = await fetchFromAppsScript('getAllLastPresences'); // CORRIGIDO AQUI!
+        const data = await fetchFromAppsScript('getLastPresencesForAllMembers'); // CORRIGIDO AQUI!
         res.status(200).json(data.data || {}); // Apps Script retorna { success: true, data: {...} }
     } catch (error) {
         console.error('Erro no backend ao obter todas as últimas presenças:', error);
