@@ -170,8 +170,13 @@ app.post("/login", async (req, res) => {
     }
 
     try {
-        const responseData = await fetchFromAppsScript('getMembros');
-        const membros = responseData.membros || [];
+       const responseData = await fetchFromAppsScript('getMembros');
+        // ESTA LINHA PRECISA SER ALTERADA:
+        // const membros = responseData.membros || []; // <-- INCORRETO
+        
+        // MUDANÇA PARA:
+        const membros = responseData.data.membros || []; // <-- CORRETO!
+
         console.log(`Backend Login: Membros recebidos do Apps Script: ${JSON.stringify(membros.map(m => m.Nome))}`);
         console.log(`Backend Login: Username digitado (normalizado): '${username.toLowerCase().trim()}'`);
 
