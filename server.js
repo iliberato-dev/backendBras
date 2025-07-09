@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js)
+// Backend Node.js (server.js) - SEM ALTERAÇÕES NECESSÁRIAS
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -41,12 +41,12 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
             }
         }
         url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
-    } else if (method === 'POST') { // Simplificado: 'doPost' ou qualquer POST agora pode usar 'tipo' no body se precisar, mas para Apps Script o padrão é no body
-        if (actionType !== 'doPost') { // Se não for o doPost padrão, pode adicionar tipo como param
+    } else if (method === 'POST') {
+        if (actionType !== 'doPost') {
              urlParams.append('tipo', actionType);
              url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
         } else {
-             url = APPS_SCRIPT_URL; // Para doPost, o tipo é implícito ou via payload
+             url = APPS_SCRIPT_URL;
         }
     }
     
@@ -136,19 +136,21 @@ app.get('/get-all-last-presences', async (req, res) => {
 // --- NOVA ROTA ADICIONADA: Obter presenças detalhadas com filtros ---
 app.get('/get-detailed-presences', async (req, res) => {
     try {
-        // req.query contém os parâmetros de filtro: startDate, endDate, memberName
         const { startDate, endDate, memberName } = req.query;
         console.log(`Backend: Requisição de presenças detalhadas com filtros: startDate=${startDate}, endDate=${endDate}, memberName=${memberName}`);
 
         const queryParams = {
             startDate: startDate,
             endDate: endDate,
-            memberName: memberName
+            memberName: memberName,
+            // Passa os filtros do dashboard principal também
+            mainFilterPeriodo: req.query.mainFilterPeriodo,
+            mainFilterLider: req.query.mainFilterLider,
+            mainFilterGape: req.query.mainFilterGape
         };
 
-        // Chama a nova função no Apps Script: 'getDetailedPresences'
         const data = await fetchFromAppsScript('getDetailedPresences', 'GET', null, queryParams);
-        res.status(200).json(data.data || []); // Apps Script deve retornar um array de presenças
+        res.status(200).json(data.data || []);
     } catch (error) {
         console.error('Erro no backend ao obter presenças detalhadas:', error);
         res.status(500).json({ success: false, message: 'Erro ao obter presenças detalhadas.', details: error.message });
@@ -184,6 +186,7 @@ app.post("/login", async (req, res) => {
         const membroEncontradoPeloNome = membros.find(membro => {
             const nomeMembroNaPlanilha = String(membro.Nome || '').toLowerCase().trim();
             console.log(`Backend Login: Comparando username '${usernameDigitado}' com Nome Membro: '${nomeMembroNaPlanilha}'`);
+            // Verifica se todas as palavras do username digitado estão contidas no nome do membro
             const allWordsMatch = usernameWords.every(word => nomeMembroNaPlanilha.includes(word));
             return allWordsMatch;
         });
@@ -198,18 +201,20 @@ app.post("/login", async (req, res) => {
                 
                 let isLeaderByRole = false;
 
+                // Verifica se o Cargo ou Status do próprio membro o qualifica como líder
                 if (cargoMembro.includes('líder') || statusMembro.includes('líder')) {
                     isLeaderByRole = true;
                     console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' é líder por Cargo/Status.`);
                 }
 
+                // Se não for líder por cargo/status, verifica se ele é listado como líder em algum grupo
                 if (!isLeaderByRole) { 
                     const nomeDoMembroLogando = String(membroEncontradoPeloNome.Nome || '').toLowerCase().trim();
                     console.log(`Backend Login: Verificando se '${nomeDoMembroLogando}' aparece como líder em algum grupo...`);
 
                     isLeaderByRole = membros.some(anyMember => {
-                        const liderNaPlanilhaCompleto = String(anyMember.Lider || '').toLowerCase().trim();
-                        const congregacaoAnyMember = String(anyMember.Congregacao || '').toLowerCase().trim();
+                        const liderNaPlanilhaCompleto = String(anyMember.Lider || '').toLowerCase().trim(); // Acesso via .Lider (mapeado)
+                        const congregacaoAnyMember = String(anyMember.Congregacao || '').toLowerCase().trim(); // Acesso via .Congregacao (mapeado)
 
                         let nomeLiderExtraidoDoGrupo = '';
                         const dynamicPrefix = congregacaoAnyMember ? `${congregacaoAnyMember} | `.toLowerCase() : '';
@@ -225,6 +230,7 @@ app.post("/login", async (req, res) => {
 
                         let isFuzzyMatch = false;
 
+                        // Correspondência de palavras para nomes com múltiplos termos
                         if (loggingMemberWords.length > 0 && extractedLeaderWords.length > 0) {
                             const [shorterArr, longerArr] = loggingMemberWords.length <= extractedLeaderWords.length ?
                                 [loggingMemberWords, extractedLeaderWords] :
