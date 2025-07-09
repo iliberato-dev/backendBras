@@ -1,12 +1,14 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - SEM ALTERAÇÕES NECESSÁRIAS
+// Backend Node.js (server.js) - ATUALIZADO (v2)
+// Foco na delegação de autenticação de líderes para o Apps Script
+// e melhoria da função de comunicação.
 // ------------------------------------------------------
 require('dotenv').config();
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const fetch = require('node-fetch');
+const fetch = require('node-fetch'); // Certifique-se de que 'node-fetch' está instalado (npm install node-fetch@2)
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,52 +17,61 @@ const PORT = process.env.PORT || 3000;
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const FRONTEND_URL = process.env.FRONTEND_URL;
 
+// Configuração do CORS para permitir requisições do seu frontend
 app.use(cors({
     origin: FRONTEND_URL,
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
+// Middleware para parsear o corpo das requisições JSON
 app.use(bodyParser.json());
 
-// --- FUNÇÃO UTILITÁRIA PARA REQUISIÇÕES AO APPS SCRIPT ---
-async function fetchFromAppsScript(actionType, method = 'GET', body = null, queryParams = {}) {
+// --- FUNÇÃO UTILITÁRIA PARA REQUISIÇÕES AO APPS SCRIPT (REVISADA) ---
+/**
+ * Encaminha uma requisição para o Google Apps Script.
+ * @param {string} action O nome da ação a ser executada no Apps Script (ex: 'getMembros', 'registerPresence', 'login').
+ * @param {string} method O método HTTP ('GET' ou 'POST').
+ * @param {Object} [body] O corpo da requisição para métodos POST.
+ * @param {Object} [queryParams] Parâmetros de query para métodos GET.
+ * @returns {Promise<Object>} A resposta JSON do Apps Script.
+ * @throws {Error} Se houver erro de configuração, comunicação ou erro lógico do Apps Script.
+ */
+async function fetchFromAppsScript(action, method = 'GET', body = null, queryParams = {}) {
     if (!APPS_SCRIPT_URL) {
         console.error('Erro de configuração: Variável de ambiente APPS_SCRIPT_URL não definida.');
         throw new Error('Erro de configuração do servidor: URL do Apps Script não definida.');
     }
 
-    let url = APPS_SCRIPT_URL;
-    const urlParams = new URLSearchParams();
+    let url = new URL(APPS_SCRIPT_URL); // Usa o construtor URL para melhor manipulação
 
     if (method === 'GET') {
-        urlParams.append('tipo', actionType);
+        url.searchParams.append('tipo', action); // Adiciona 'tipo' para GET
         for (const key in queryParams) {
-            if (queryParams.hasOwnProperty(key) && queryParams[key]) {
-                urlParams.append(key, queryParams[key]);
+            if (Object.hasOwnProperty.call(queryParams, key) && queryParams[key] !== undefined && queryParams[key] !== null) {
+                url.searchParams.append(key, queryParams[key]);
             }
         }
-        url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
-    } else if (method === 'POST') {
-        if (actionType !== 'doPost') {
-             urlParams.append('tipo', actionType);
-             url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
-        } else {
-             url = APPS_SCRIPT_URL;
-        }
-    }
-    
+    } 
+    // Para POST, o 'action' é enviado no corpo (como 'action' ou implícito pelo contexto da rota),
+    // e o Apps Script decide o que fazer via `postData.action`.
+    // Não precisamos adicionar 'tipo' na URL para POSTs, a menos que o Apps Script explicitamente espere.
+    // Com o `doPost` do Apps Script lendo `postData.action`, a URL base é suficiente para POSTs.
+
     const options = {
         method: method,
         headers: { 'Content-Type': 'application/json' },
     };
-    if (body) {
-        options.body = JSON.stringify(body);
+
+    // Para requisições POST, o body precisa incluir a 'action' que o Apps Script espera
+    if (method === 'POST') {
+        options.body = JSON.stringify({ ...body, action: action }); // Adiciona a ação ao corpo
     }
 
-    console.log(`Backend: Encaminhando ${method} para Apps Script: ${url}`);
+    console.log(`Backend: Encaminhando ${method} para Apps Script (Action: ${action}): ${url.toString()}`);
     
-    const response = await fetch(url, options);
+    const response = await fetch(url.toString(), options); // Usa url.toString()
+
     const responseText = await response.text();
 
     let responseData;
@@ -68,15 +79,17 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
         responseData = JSON.parse(responseText);
     } catch (e) {
         console.error(`Backend: Erro ao parsear JSON do Apps Script: ${e.message}. Resposta bruta: ${responseText}`);
-        responseData = { success: false, message: `Resposta inválida do Apps Script: ${responseText.substring(0, 100)}...`, details: e.message };
+        // Lança um erro padronizado para o consumidor do fetchFromAppsScript
+        throw new Error(`Resposta inválida do Apps Script: ${responseText.substring(0, Math.min(responseText.length, 200))}... (Não é JSON válido)`);
     }
 
     if (!response.ok || responseData.success === false) {
-        console.error(`Backend: Erro lógico/HTTP do Apps Script (${actionType} ${method}): Status ${response.status} - Resposta: ${JSON.stringify(responseData)}`);
-        throw new Error(responseData.message || 'Erro desconhecido do Apps Script.');
+        console.error(`Backend: Erro lógico/HTTP do Apps Script (Action: ${action}, Method: ${method}): Status ${response.status} - Resposta: ${JSON.stringify(responseData)}`);
+        // Lança o erro para ser pego pelo catch da rota
+        throw new Error(responseData.message || `Erro desconhecido do Apps Script para ação ${action}.`);
     }
     
-    console.log(`Backend: Resposta bem-sucedida do Apps Script (${actionType} ${method}): ${JSON.stringify(responseData)}`);
+    console.log(`Backend: Resposta bem-sucedida do Apps Script (Action: ${action}, Method: ${method}): ${JSON.stringify(responseData)}`);
     return responseData;
 }
 
@@ -84,8 +97,9 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
 
 app.get('/get-membros', async (req, res) => {
     try {
+        // O Apps Script retorna { success: true, data: { membros: [...] } }
         const data = await fetchFromAppsScript('getMembros');
-        res.status(200).json(data);
+        res.status(200).json(data); // Retorna a resposta completa do Apps Script
     } catch (error) {
         console.error('Erro no backend ao obter membros:', error);
         res.status(500).json({ success: false, message: 'Erro ao obter dados de membros.', details: error.message });
@@ -98,15 +112,17 @@ app.post('/presenca', async (req, res) => {
         return res.status(400).json({ success: false, message: 'Dados incompletos para registrar presença.' });
     }
     try {
-        const responseData = await fetchFromAppsScript('doPost', 'POST', { nome, data, hora, sheet });
+        // A action 'registerPresence' é enviada no corpo da requisição POST para o Apps Script
+        const responseData = await fetchFromAppsScript('registerPresence', 'POST', { nome, data, hora, sheet });
         res.status(200).json(responseData);
     } catch (error) {
         console.error('Erro no backend ao registrar presença:', error);
+        // Tratamento específico para presença já registrada
         if (error.message && error.message.includes("já foi registrada")) {
-            return res.status(200).json({
+            return res.status(200).json({ // Status 200 porque é uma validação de negócio, não um erro de servidor
                 success: false,
                 message: error.message,
-                lastPresence: { data: data, hora: hora }
+                lastPresence: { data: data, hora: hora } // Opcional, se o frontend precisar
             });
         }
         res.status(500).json({ success: false, message: 'Erro ao registrar presença.', details: error.message });
@@ -115,8 +131,9 @@ app.post('/presenca', async (req, res) => {
 
 app.get('/get-presencas-total', async (req, res) => {
     try {
+        // req.query contém os filtros (periodo, lider, gape, monthYear)
         const data = await fetchFromAppsScript('presencasTotal', 'GET', null, req.query);
-        res.status(200).json(data.data || {});
+        res.status(200).json(data.data || {}); // Apps Script retorna { success: true, data: { totalPresences, generalTotal } }
     } catch (error) {
         console.error('Erro no backend ao obter presenças totais:', error);
         res.status(500).json({ success: false, message: 'Erro ao obter presenças totais.', details: error.message });
@@ -125,6 +142,7 @@ app.get('/get-presencas-total', async (req, res) => {
 
 app.get('/get-all-last-presences', async (req, res) => {
     try {
+        // Apps Script retorna { success: true, data: { [memberName]: { data, hora } } }
         const data = await fetchFromAppsScript('getLastPresencesForAllMembers');
         res.status(200).json(data.data || {});
     } catch (error) {
@@ -133,153 +151,67 @@ app.get('/get-all-last-presences', async (req, res) => {
     }
 });
 
-// --- NOVA ROTA ADICIONADA: Obter presenças detalhadas com filtros ---
 app.get('/get-detailed-presences', async (req, res) => {
     try {
-        const { startDate, endDate, memberName } = req.query;
-        console.log(`Backend: Requisição de presenças detalhadas com filtros: startDate=${startDate}, endDate=${endDate}, memberName=${memberName}`);
-
-        const queryParams = {
-            startDate: startDate,
-            endDate: endDate,
-            memberName: memberName,
-            // Passa os filtros do dashboard principal também
-            mainFilterPeriodo: req.query.mainFilterPeriodo,
-            mainFilterLider: req.query.mainFilterLider,
-            mainFilterGape: req.query.mainFilterGape
-        };
-
-        const data = await fetchFromAppsScript('getDetailedPresences', 'GET', null, queryParams);
-        res.status(200).json(data.data || []);
+        // req.query contém todos os filtros necessários para esta requisição
+        // Apps Script retorna { success: true, data: { detailedPresences, attendanceByPeriod, memberAttendanceCounts } }
+        const data = await fetchFromAppsScript('getDetailedPresences', 'GET', null, req.query);
+        res.status(200).json(data.data || {});
     } catch (error) {
         console.error('Erro no backend ao obter presenças detalhadas:', error);
         res.status(500).json({ success: false, message: 'Erro ao obter presenças detalhadas.', details: error.message });
     }
 });
 
+// --- Rota de Autenticação de Usuário (Líder ou Admin) ---
 app.post("/login", async (req, res) => {
     const { username, password } = req.body;
-    console.log(`Backend: Tentativa de login para usuário: "${username}" com senha: "${password}"`);
+    console.log(`Backend: Tentativa de login para usuário: "${username}"`);
 
     const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
     const ADMIN_RI = process.env.ADMIN_RI || 'admin';
 
+    // 1. Tenta login como Administrador local (hardcoded ou via .env)
     if (username.toLowerCase() === ADMIN_USERNAME.toLowerCase() && password === ADMIN_RI) {
         console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
-        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: username });
+        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: username, role: 'admin' });
     }
 
     try {
-       const responseData = await fetchFromAppsScript('getMembros');
-        // ESTA LINHA PRECISA SER ALTERADA:
-        // const membros = responseData.membros || []; // <-- INCORRETO
+        // 2. Tenta login via Google Apps Script (delegando a lógica de autenticação de líder para o Apps Script)
+        // A função 'loginLeader' no Apps Script é chamada com 'usuario' e 'senha'.
+        // O Apps Script verifica a planilha 'Login' e a regra de liderança.
+        const responseData = await fetchFromAppsScript('loginLeader', 'POST', { usuario: username, senha: password });
         
-        // MUDANÇA PARA:
-        const membros = responseData.data.membros || []; // <-- CORRETO!
-
-        console.log(`Backend Login: Membros recebidos do Apps Script: ${JSON.stringify(membros.map(m => m.Nome))}`);
-        console.log(`Backend Login: Username digitado (normalizado): '${username.toLowerCase().trim()}'`);
-
-        if (!membros || !Array.isArray(membros) || membros.length === 0) {
-            console.warn("Backend: Nenhuma lista de membros válida retornada do Apps Script ou a lista está vazia para autenticação.");
-            return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar os dados de membros ou a lista está vazia para autenticação.' });
-        }
-
-        const usernameDigitado = String(username || '').toLowerCase().trim();
-        const usernameWords = usernameDigitado.split(' ').filter(word => word.length > 0);
-
-        const membroEncontradoPeloNome = membros.find(membro => {
-            const nomeMembroNaPlanilha = String(membro.Nome || '').toLowerCase().trim();
-            console.log(`Backend Login: Comparando username '${usernameDigitado}' com Nome Membro: '${nomeMembroNaPlanilha}'`);
-            // Verifica se todas as palavras do username digitado estão contidas no nome do membro
-            const allWordsMatch = usernameWords.every(word => nomeMembroNaPlanilha.includes(word));
-            return allWordsMatch;
+        // Se o Apps Script retornou sucesso, o líder foi autenticado lá.
+        console.log(`Backend: Login bem-sucedido via Apps Script para líder: ${responseData.data.leaderName}`);
+        return res.status(200).json({ 
+            success: true, 
+            message: responseData.message || `Login bem-sucedido, ${responseData.data.leaderName}!`, 
+            leaderName: responseData.data.leaderName,
+            role: 'leader' // Atribui o papel de 'leader' para o frontend
         });
 
-        if (membroEncontradoPeloNome) {
-            console.log(`Backend Login: Membro encontrado pelo nome: ${membroEncontradoPeloNome.Nome}`);
-            if (String(membroEncontradoPeloNome.RI).trim() === String(password).trim()) {
-                console.log(`Backend Login: Senha (RI) correta para ${membroEncontradoPeloNome.Nome}.`);
-                
-                const cargoMembro = String(membroEncontradoPeloNome.Cargo || '').toLowerCase().trim();
-                const statusMembro = String(membroEncontradoPeloNome.Status || '').toLowerCase().trim();
-                
-                let isLeaderByRole = false;
-
-                // Verifica se o Cargo ou Status do próprio membro o qualifica como líder
-                if (cargoMembro.includes('líder') || statusMembro.includes('líder')) {
-                    isLeaderByRole = true;
-                    console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' é líder por Cargo/Status.`);
-                }
-
-                // Se não for líder por cargo/status, verifica se ele é listado como líder em algum grupo
-                if (!isLeaderByRole) { 
-                    const nomeDoMembroLogando = String(membroEncontradoPeloNome.Nome || '').toLowerCase().trim();
-                    console.log(`Backend Login: Verificando se '${nomeDoMembroLogando}' aparece como líder em algum grupo...`);
-
-                    isLeaderByRole = membros.some(anyMember => {
-                        const liderNaPlanilhaCompleto = String(anyMember.Lider || '').toLowerCase().trim(); // Acesso via .Lider (mapeado)
-                        const congregacaoAnyMember = String(anyMember.Congregacao || '').toLowerCase().trim(); // Acesso via .Congregacao (mapeado)
-
-                        let nomeLiderExtraidoDoGrupo = '';
-                        const dynamicPrefix = congregacaoAnyMember ? `${congregacaoAnyMember} | `.toLowerCase() : '';
-
-                        if (dynamicPrefix && liderNaPlanilhaCompleto.startsWith(dynamicPrefix)) {
-                            nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto.substring(dynamicPrefix.length).trim();
-                        } else {
-                            nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto;
-                        }
-
-                        const loggingMemberWords = nomeDoMembroLogando.split(' ').filter(word => word.length > 0);
-                        const extractedLeaderWords = nomeLiderExtraidoDoGrupo.split(' ').filter(word => word.length > 0);
-
-                        let isFuzzyMatch = false;
-
-                        // Correspondência de palavras para nomes com múltiplos termos
-                        if (loggingMemberWords.length > 0 && extractedLeaderWords.length > 0) {
-                            const [shorterArr, longerArr] = loggingMemberWords.length <= extractedLeaderWords.length ?
-                                [loggingMemberWords, extractedLeaderWords] :
-                                [extractedLeaderWords, loggingMemberWords];
-
-                            isFuzzyMatch = shorterArr.every((sWord, index) => {
-                                return longerArr[index] && longerArr[index].startsWith(sWord);
-                            });
-                        }
-                        
-                        console.log(`Backend Login:    Comparando '${nomeDoMembroLogando}' com líder extraído: '${nomeLiderExtraidoDoGrupo}'. Fuzzy Match: ${isFuzzyMatch}`);
-                        return isFuzzyMatch;
-                    });
-                }
-                
-                console.log(`Backend Login: Resultado final - É líder? ${isLeaderByRole}`);
-
-                if (isLeaderByRole) {
-                    console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontradoPeloNome.Nome}`);
-                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!`, leaderName: membroEncontradoPeloNome.Nome });
-                } else {
-                    console.log(`Backend: Usuário '${username}' encontrado e senha correta, mas não tem o cargo/status de Líder.`);
-                    return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.' });
-                }
-            } else {
-                console.log(`Backend: Senha inválida para o usuário: ${username}`);
-                return res.status(401).json({ success: false, message: 'Senha inválida.' });
-            }
-        } else {
-            console.log(`Backend: Usuário '${username}' não encontrado na lista de membros.`);
-            return res.status(401).json({ success: false, message: 'Usuário não encontrado ou credenciais inválidas.' });
-        }
-
     } catch (error) {
-        console.error("Backend: Erro FATAL ao tentar autenticar líder com Apps Script:", error);
-        return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.', details: error.message });
+        console.error("Backend: Erro ao tentar autenticar líder com Apps Script:", error);
+        // O Apps Script já deve estar retornando mensagens específicas (ex: "Credenciais inválidas")
+        const statusCode = error.message.includes('Credenciais inválidas') || error.message.includes('não encontrado') || error.message.includes('Usuário não é um líder') ? 401 : 500;
+        return res.status(statusCode).json({ 
+            success: false, 
+            message: error.message || 'Erro interno do servidor ao autenticar.', 
+            details: error.message 
+        });
     }
 });
 
+// Rota de status para verificar se o servidor está online
 app.get('/status', (req, res) => {
     res.status(200).json({ status: 'API está online e funcionando!', timestamp: new Date().toISOString() });
 });
 
+// Inicia o servidor
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     console.log(`CORS configurado para permitir requisições de: ${FRONTEND_URL}`);
+    console.log(`URL do Google Apps Script: ${APPS_SCRIPT_URL ? APPS_SCRIPT_URL.substring(0, 40) + '...' : 'NÃO DEFINIDA'}`);
 });
