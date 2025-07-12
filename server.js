@@ -94,6 +94,44 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
     return responseData;
 }
 
+// --- NOVA ROTA PARA UPLOAD DE FOTO ---
+app.post('/upload-photo', async (req, res) => {
+    const { fileName, fileData } = req.body; // fileData é a string base64
+    if (!fileName || !fileData) {
+        return res.status(400).json({ success: false, message: 'Nome do arquivo e dados da foto são obrigatórios.' });
+    }
+
+    try {
+        // Inclua 'tipo' no payload para o Apps Script, direcionando para a função 'uploadPhoto'
+        const responseData = await fetchFromAppsScript('doPost', 'POST', { tipo: 'uploadPhoto', fileName, fileData });
+        
+        // O Apps Script já retorna a URL e ID, passe-os diretamente
+        res.status(200).json(responseData); 
+    } catch (error) {
+        console.error('Backend: Erro ao fazer upload da foto:', error.message);
+        res.status(500).json({ success: false, message: 'Erro ao fazer upload da foto.', details: error.message });
+    }
+});
+
+// --- ROTA OPCIONAL PARA OBTER URL DA FOTO POR ID ---
+// Você pode não precisar desta rota se o upload já retorna a URL e você a armazena.
+// Mas é útil se você apenas tiver o ID da foto e precisar buscar a URL novamente.
+app.get('/get-photo-url/:fileId', async (req, res) => {
+    const { fileId } = req.params;
+    if (!fileId) {
+        return res.status(400).json({ success: false, message: 'ID do arquivo é obrigatório.' });
+    }
+
+    try {
+        // Chama o Apps Script com o tipo 'getPhotoUrl' e o fileId como query param
+        const responseData = await fetchFromAppsScript('getPhotoUrl', 'GET', null, { fileId: fileId });
+        res.status(200).json(responseData);
+    } catch (error) {
+        console.error('Backend: Erro ao obter URL da foto:', error.message);
+        res.status(500).json({ success: false, message: 'Erro ao obter URL da foto.', details: error.message });
+    }
+});
+
 /**
  * Função para obter membros, utilizando cache.
  */
