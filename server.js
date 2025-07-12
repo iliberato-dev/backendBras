@@ -1,3 +1,6 @@
+// ------------------------------------------------------
+// Backend Node.js (server.js) - Atualizado
+// ------------------------------------------------------
 require('dotenv').config();
 
 const express = require('express');
@@ -27,7 +30,7 @@ app.use(bodyParser.json());
 // --- CACHE DE MEMBROS ---
 let cachedMembros = null;
 let lastMembrosFetchTime = 0;
-const MEMBERS_CACHE_TTL = 5 * 60 * 1000;
+const MEMBERS_CACHE_TTL = 5 * 60 * 1000; // Cache de 5 minutos (em milissegundos)
 
 // --- FUNÇÃO UTILITÁRIA PARA REQUISIÇÕES AO APPS SCRIPT ---
 async function fetchFromAppsScript(actionType, method = 'GET', body = null, queryParams = {}) {
@@ -37,7 +40,7 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
     }
     if (!APPS_SCRIPT_AUTH_TOKEN) {
         console.error('Backend: Erro de configuração: Variável de ambiente APPS_SCRIPT_AUTH_TOKEN não definida.');
-        throw new Error('Erro de configuração do servidor: Token de autenticação do Apps Script não definida.');
+        throw new Error('Erro de configuração do servidor: Token de autenticação do Apps Script não definido.');
     }
 
     let url = APPS_SCRIPT_URL;
@@ -50,7 +53,6 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
     if (method === 'GET') {
         urlParams.append('tipo', actionType);
         urlParams.append('auth_token', APPS_SCRIPT_AUTH_TOKEN);
-        
         for (const key in queryParams) {
             if (queryParams.hasOwnProperty(key) && queryParams[key]) {
                 urlParams.append(key, queryParams[key]);
@@ -73,7 +75,7 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
     try {
         responseData = JSON.parse(responseText);
     } catch (e) {
-        console.error(`Backend: Erro ao parsear JSON do Apps Script: ${e.message}. Resposta bruta (primeiros 500 chars): ${responseText.substring(0, 500)}...`);
+        console.error(`Backend: Erro ao parsear JSON do Apps Script: ${e.message}. Resposta bruta: ${responseText.substring(0, 500)}...`);
         throw new Error(`Resposta inválida do Apps Script: ${responseText.substring(0, 100)}...`);
     }
 
@@ -92,6 +94,47 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
     return responseData;
 }
 
+// --- NOVA ROTA PARA UPLOAD DE FOTO ---
+app.post('/upload-photo', async (req, res) => {
+    const { fileName, fileData } = req.body; // fileData é a string base64
+    if (!fileName || !fileData) {
+        return res.status(400).json({ success: false, message: 'Nome do arquivo e dados da foto são obrigatórios.' });
+    }
+
+    try {
+        // Inclua 'tipo' no payload para o Apps Script, direcionando para a função 'uploadPhoto'
+        const responseData = await fetchFromAppsScript('doPost', 'POST', { tipo: 'uploadPhoto', fileName, fileData });
+        
+        // O Apps Script já retorna a URL e ID, passe-os diretamente
+        res.status(200).json(responseData); 
+    } catch (error) {
+        console.error('Backend: Erro ao fazer upload da foto:', error.message);
+        res.status(500).json({ success: false, message: 'Erro ao fazer upload da foto.', details: error.message });
+    }
+});
+
+// --- ROTA OPCIONAL PARA OBTER URL DA FOTO POR ID ---
+// Você pode não precisar desta rota se o upload já retorna a URL e você a armazena.
+// Mas é útil se você apenas tiver o ID da foto e precisar buscar a URL novamente.
+app.get('/get-photo-url/:fileId', async (req, res) => {
+    const { fileId } = req.params;
+    if (!fileId) {
+        return res.status(400).json({ success: false, message: 'ID do arquivo é obrigatório.' });
+    }
+
+    try {
+        // Chama o Apps Script com o tipo 'getPhotoUrl' e o fileId como query param
+        const responseData = await fetchFromAppsScript('getPhotoUrl', 'GET', null, { fileId: fileId });
+        res.status(200).json(responseData);
+    } catch (error) {
+        console.error('Backend: Erro ao obter URL da foto:', error.message);
+        res.status(500).json({ success: false, message: 'Erro ao obter URL da foto.', details: error.message });
+    }
+});
+
+/**
+ * Função para obter membros, utilizando cache.
+ */
 async function getMembrosWithCache() {
     if (cachedMembros && (Date.now() - lastMembrosFetchTime < MEMBERS_CACHE_TTL)) {
         console.log("Backend: Retornando membros do cache.");
@@ -111,54 +154,24 @@ async function getMembrosWithCache() {
     return data;
 }
 
+// Helper para normalizar strings para comparação (removendo acentos, caracteres especiais, e convertendo para minúsculas)
 function normalizeString(str) {
     if (typeof str !== 'string') {
         return '';
     }
     return str.toLowerCase()
-              .normalize("NFD")
-              .replace(/[\u0300-\u036f]/g, "")
-              .replace(/[^a-z0-9\s]/g, '')
+              .normalize("NFD") // Normaliza para decompor caracteres acentuados
+              .replace(/[\u0300-\u036f]/g, "") // Remove os diacríticos (acentos)
+              .replace(/[^a-z0-9\s]/g, '') // Remove caracteres não alfanuméricos (mantém espaços)
               .trim();
 }
 
-// Rotas da API
+// --- ROTAS DA API ---
+
 app.get('/get-membros', async (req, res) => {
     try {
         const data = await getMembrosWithCache();
-        
-        const { nome, periodo, lider, gape } = req.query;
-        let filteredMembros = data.membros || [];
-
-        if (nome) {
-            const normalizedNameFilter = normalizeString(nome);
-            filteredMembros = filteredMembros.filter(m => 
-                normalizeString(m.Nome || '').includes(normalizedNameFilter)
-            );
-        }
-        if (periodo) {
-            filteredMembros = filteredMembros.filter(m => 
-                normalizeString(m.Periodo || '') === normalizeString(periodo)
-            );
-        }
-        if (lider) {
-            const normalizedLiderFilter = normalizeString(lider);
-            filteredMembros = filteredMembros.filter(m => {
-                const liderCompleto = String(m.Lider || '').trim();
-                let nomeLiderExtraido = liderCompleto;
-                if (m.Congregacao && liderCompleto.startsWith(`${m.Congregacao} | `)) {
-                    nomeLiderExtraido = liderCompleto.substring(`${m.Congregacao} | `.length).trim();
-                }
-                return normalizeString(nomeLiderExtraido).includes(normalizedLiderFilter);
-            });
-        }
-        if (gape) {
-            filteredMembros = filteredMembros.filter(m => 
-                normalizeString(m.Congregacao || '') === normalizeString(gape)
-            );
-        }
-
-        res.status(200).json({ success: true, membros: filteredMembros });
+        res.status(200).json(data);
     } catch (error) {
         console.error('Erro no backend ao obter membros (via cache ou Apps Script):', error.message);
         res.status(500).json({ success: false, message: 'Erro ao obter dados de membros.', details: error.message });
@@ -166,18 +179,12 @@ app.get('/get-membros', async (req, res) => {
 });
 
 app.post('/presenca', async (req, res) => {
-    const { memberId, memberName, leaderName, gapeName, periodo, presenceDate } = req.body;
-
-    if (!memberId || !memberName || !leaderName || !gapeName || !periodo || !presenceDate) {
+    const { nome, data, hora, sheet } = req.body;
+    if (!nome || !data || !hora || !sheet) {
         return res.status(400).json({ success: false, message: 'Dados incompletos para registrar presença.' });
     }
-
     try {
-        const responseData = await fetchFromAppsScript(
-            'registerMemberPresence',
-            'POST', 
-            { memberId, memberName, leaderName, gapeName, periodo, presenceDate }
-        );
+        const responseData = await fetchFromAppsScript('doPost', 'POST', { nome, data, hora, sheet });
         
         res.status(200).json(responseData);
     } catch (error) {
@@ -187,7 +194,7 @@ app.post('/presenca', async (req, res) => {
             return res.status(409).json({
                 success: false,
                 message: error.message,
-                lastPresence: error.lastPresence || null
+                lastPresence: error.lastPresence || { data, hora }
             });
         }
         
@@ -198,7 +205,7 @@ app.post('/presenca', async (req, res) => {
 app.get('/get-presencas-total', async (req, res) => {
     try {
         const data = await fetchFromAppsScript('presencasTotal', 'GET', null, req.query);
-        res.status(200).json(data); 
+        res.status(200).json(data.data || {});
     } catch (error) {
         console.error('Erro no backend ao obter presenças totais:', error.message);
         res.status(500).json({ success: false, message: 'Erro ao obter presenças totais.', details: error.message });
@@ -208,24 +215,27 @@ app.get('/get-presencas-total', async (req, res) => {
 app.get('/get-all-last-presences', async (req, res) => {
     try {
         const data = await fetchFromAppsScript('getLastPresencesForAllMembers');
-        res.status(200).json(data); 
+        res.status(200).json(data.data || {});
     } catch (error) {
         console.error('Erro no backend ao obter todas as últimas presenças:', error.message);
         res.status(500).json({ success: false, message: 'Erro ao obter últimas presenças de todos os membros.', details: error.message });
     }
 });
 
+// Rota de Autenticação (LOGIN) - Lógica de busca de nome aprimorada
 app.post("/login", async (req, res) => {
     const { username, password } = req.body;
     console.log(`Backend: Tentativa de login para usuário: "${username}"`);
 
+    // 1. Tenta autenticar como administrador master
     if (ADMIN_USERNAME && ADMIN_RI && 
         normalizeString(username) === normalizeString(ADMIN_USERNAME) && 
-        password === ADMIN_RI) {
+        password === ADMIN_RI) { // RI do admin deve ser exato
         console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
-        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: username, role: 'admin' });
+        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: username });
     }
 
+    // 2. Se não for administrador, tenta autenticar como líder (usando cache)
     try {
         const responseData = await getMembrosWithCache();
         const membros = responseData.membros || [];
@@ -236,31 +246,47 @@ app.post("/login", async (req, res) => {
         }
 
         const usernameDigitadoNormalized = normalizeString(username);
-        const passwordDigitado = String(password || '').trim();
+        const passwordDigitado = String(password || '').trim(); // RI do usuário deve ser exato
 
         let membroEncontradoPeloNome = null;
 
+        // **LÓGICA APRIMORADA PARA ENCONTRAR O MEMBRO PELO NOME**
+        // Primeiro, tenta encontrar um nome completo ou quase completo para reduzir ambiguidades.
+        // Depois, tenta encontrar por partes do nome.
+        
+        // 1. Tenta encontrar correspondência exata (normalizada)
         membroEncontradoPeloNome = membros.find(membro => 
             normalizeString(membro.Nome || '') === usernameDigitadoNormalized
         );
 
+        // 2. Se não encontrou, tenta encontrar se o nome digitado é o início de um nome
+        // Ex: "João S" deve encontrar "João Silva"
         if (!membroEncontradoPeloNome) {
             membroEncontradoPeloNome = membros.find(membro =>
                 normalizeString(membro.Nome || '').startsWith(usernameDigitadoNormalized)
             );
         }
 
+        // 3. Se ainda não encontrou, tenta encontrar se o nome digitado está contido no nome completo,
+        // mas com uma verificação mais "forte" (ex: "Silva J" encontra "João Silva")
         if (!membroEncontradoPeloNome) {
             membroEncontradoPeloNome = membros.find(membro => {
                 const nomeMembroNaPlanilhaNormalized = normalizeString(membro.Nome || '');
                 const usernameWords = usernameDigitadoNormalized.split(' ').filter(w => w.length > 0);
+                
+                // Garante que todas as palavras do username estão no nome do membro
                 return usernameWords.every(word => nomeMembroNaPlanilhaNormalized.includes(word));
             });
         }
         
+        // **IMPORTANTE: Se múltiplas correspondências forem possíveis com a lógica flexível,
+        // você pode precisar de uma etapa extra aqui para lidar com ambiguidade,
+        // ou o primeiro match será o "escolhido". Para este cenário, o `find` já pega o primeiro.**
+
+
         if (membroEncontradoPeloNome) {
             console.log(`Backend Login: Membro encontrado pelo nome flexível: ${membroEncontradoPeloNome.Nome}`);
-            
+            // **Verifica a senha (RI) - DEVE SER EXATO**
             if (String(membroEncontradoPeloNome.RI || '').trim() === passwordDigitado) {
                 console.log(`Backend Login: Senha (RI) correta para ${membroEncontradoPeloNome.Nome}.`);
                 
@@ -269,11 +295,14 @@ app.post("/login", async (req, res) => {
                 
                 let isLeaderByRole = false;
 
+                // 1. Verifica se o Cargo ou Status do próprio membro indica liderança
                 if (cargoMembroNormalized.includes('lider') || statusMembroNormalized.includes('lider')) {
                     isLeaderByRole = true;
                     console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' é líder por Cargo/Status.`);
                 }
 
+                // 2. Verificação adicional: Se o membro não foi identificado como líder por Cargo/Status,
+                // verifica se o nome do membro aparece como líder em qualquer 'Grupo Líder'
                 if (!isLeaderByRole) { 
                     const nomeDoMembroLogandoNormalized = normalizeString(membroEncontradoPeloNome.Nome || '');
                     console.log(`Backend Login: Verificando se '${nomeDoMembroLogandoNormalized}' aparece como líder em algum grupo...`);
@@ -291,7 +320,12 @@ app.post("/login", async (req, res) => {
                             nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto;
                         }
 
+                        // Compara o nome normalizado do membro que está logando com o nome do líder extraído (também normalizado)
                         return normalizeString(nomeLiderExtraidoDoGrupo) === nomeDoMembroLogandoNormalized;
+                        // Poderíamos usar uma lógica de "startsWith" aqui também se os nomes de líderes forem abreviados na planilha.
+                        // Ex: `normalizeString(nomeLiderExtraidoDoGrupo).startsWith(nomeDoMembroLogandoNormalized)`
+                        // ou a lógica de `every` se o nome do líder na planilha for abreviado mas as palavras batem.
+                        // Mas para correspondência do nome do líder com o nome do membro, geralmente é mais exato.
                     });
                 }
                 
@@ -299,10 +333,10 @@ app.post("/login", async (req, res) => {
 
                 if (isLeaderByRole) {
                     console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontradoPeloNome.Nome}`);
-                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!`, leaderName: membroEncontradoPeloNome.Nome, role: 'leader' });
+                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!`, leaderName: membroEncontradoPeloNome.Nome });
                 } else {
                     console.log(`Backend: Usuário '${username}' encontrado e senha correta, mas não tem o cargo/status de Líder ou não é líder de grupo.`);
-                    return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.', role: 'member' });
+                    return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.' });
                 }
             } else {
                 console.log(`Backend: Senha inválida para o usuário: ${username}`);
@@ -323,19 +357,16 @@ app.get('/status', (req, res) => {
     res.status(200).json({ status: 'API está online e funcionando!', timestamp: new Date().toISOString() });
 });
 
+// Rota para obter as faltas (do Apps Script)
 app.get('/get-faltas', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('getDetailedSummary', 'GET', null, req.query);
-        res.status(200).json(data); 
+        // req.query passará os parâmetros (periodo, lider, gape, mes, ano) para o Apps Script
+        const data = await fetchFromAppsScript('getFaltas', 'GET', null, req.query);
+        res.status(200).json(data); // Apps Script retorna { success: true, data: {...}, totalMeetingDays: N }
     } catch (error) {
-        console.error('Erro no backend ao obter faltas/resumo detalhado:', error.message);
-        res.status(500).json({ success: false, message: 'Erro ao obter resumo detalhado.', details: error.message });
+        console.error('Erro no backend ao obter faltas:', error.message);
+        res.status(500).json({ success: false, message: 'Erro ao obter faltas.', details: error.message });
     }
-});
-
-app.post('/logout', (req, res) => {
-    console.log("Backend: Rota de logout chamada. Nenhuma lógica de sessão complexa aqui.");
-    res.status(200).json({ success: true, message: 'Logout bem-sucedido.' });
 });
 
 app.listen(PORT, () => {
