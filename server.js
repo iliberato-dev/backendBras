@@ -197,7 +197,7 @@ app.post('/presenca', async (req, res) => {
 
 app.get('/get-presencas-total', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('getMonthlySummary', 'GET', null, req.query);
+        const data = await fetchFromAppsScript('presencasTotal', 'GET', null, req.query);
         res.status(200).json(data); 
     } catch (error) {
         console.error('Erro no backend ao obter presenças totais:', error.message);
