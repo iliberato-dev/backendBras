@@ -319,6 +319,18 @@ app.get('/status', (req, res) => {
     res.status(200).json({ status: 'API está online e funcionando!', timestamp: new Date().toISOString() });
 });
 
+// Rota para obter as faltas (do Apps Script)
+app.get('/get-faltas', async (req, res) => {
+    try {
+        // req.query passará os parâmetros (periodo, lider, gape, mes, ano) para o Apps Script
+        const data = await fetchFromAppsScript('getFaltas', 'GET', null, req.query);
+        res.status(200).json(data); // Apps Script retorna { success: true, data: {...}, totalMeetingDays: N }
+    } catch (error) {
+        console.error('Erro no backend ao obter faltas:', error.message);
+        res.status(500).json({ success: false, message: 'Erro ao obter faltas.', details: error.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     console.log(`CORS configurado para permitir requisições de: ${FRONTEND_URL}`);
