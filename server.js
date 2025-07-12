@@ -1,12 +1,12 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Atualizado
+// Backend Node.js (server.js) - ATUALIZADO para Fotos de Perfil
 // ------------------------------------------------------
 require('dotenv').config();
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const fetch = require('node-fetch');
+const fetch = require('node-fetch'); // Certifique-se de que 'node-fetch' está instalado (npm install node-fetch@2)
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,7 +25,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '10mb' })); // Aumenta o limite para JSON para acomodar dados de imagem em Base64
 
 // --- CACHE DE MEMBROS ---
 let cachedMembros = null;
@@ -51,7 +51,7 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
     };
 
     if (method === 'GET') {
-        urlParams.append('tipo', actionType);
+        urlParams.append('tipo', actionType); // Para GET, o tipo é um parâmetro de query
         urlParams.append('auth_token', APPS_SCRIPT_AUTH_TOKEN);
         for (const key in queryParams) {
             if (queryParams.hasOwnProperty(key) && queryParams[key]) {
@@ -60,13 +60,14 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
         }
         url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
     } else if (method === 'POST') {
-        const postBody = { ...body, auth_token: APPS_SCRIPT_AUTH_TOKEN };
+        // Para POST, o tipo faz parte do corpo JSON junto com outros dados
+        const postBody = { tipo: actionType, ...body, auth_token: APPS_SCRIPT_AUTH_TOKEN };
         options.body = JSON.stringify(postBody);
     } else {
         throw new Error(`Método HTTP não suportado: ${method}`);
     }
     
-    console.log(`Backend: Encaminhando ${method} para Apps Script: ${url}`);
+    console.log(`Backend: Encaminhando ${method} para Apps Script. Tipo: ${actionType}. URL: ${url}`);
     
     const response = await fetch(url, options);
     const responseText = await response.text();
@@ -94,28 +95,33 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
     return responseData;
 }
 
-// --- NOVA ROTA PARA UPLOAD DE FOTO ---
-app.post('/upload-photo', async (req, res) => {
-    const { fileName, fileData } = req.body; // fileData é a string base64
-    if (!fileName || !fileData) {
-        return res.status(400).json({ success: false, message: 'Nome do arquivo e dados da foto são obrigatórios.' });
+// --- NOVA ROTA PARA UPLOAD DE FOTO DE PERFIL ---
+app.post('/upload-profile-photo', async (req, res) => {
+    // Agora esperamos 'memberName' no corpo da requisição
+    const { fileName, fileData, memberName } = req.body; 
+    
+    if (!fileName || !fileData || !memberName) {
+        return res.status(400).json({ success: false, message: 'Nome do arquivo, dados da foto e nome do membro são obrigatórios.' });
     }
 
     try {
-        // Inclua 'tipo' no payload para o Apps Script, direcionando para a função 'uploadPhoto'
-        const responseData = await fetchFromAppsScript('doPost', 'POST', { tipo: 'uploadPhoto', fileName, fileData });
+        // Chama o Apps Script com o tipo 'uploadProfilePhoto' e passa os dados da foto e o nome do membro
+        const responseData = await fetchFromAppsScript('uploadProfilePhoto', 'POST', { fileName, fileData, memberName });
         
-        // O Apps Script já retorna a URL e ID, passe-os diretamente
+        // Invalida o cache de membros para que a próxima requisição /get-membros pegue a nova foto
+        cachedMembros = null;
+        console.log(`Backend: Cache de membros invalidado após upload de foto de perfil para ${memberName}.`);
+
         res.status(200).json(responseData); 
     } catch (error) {
-        console.error('Backend: Erro ao fazer upload da foto:', error.message);
-        res.status(500).json({ success: false, message: 'Erro ao fazer upload da foto.', details: error.message });
+        console.error('Backend: Erro ao fazer upload da foto de perfil:', error.message);
+        res.status(500).json({ success: false, message: 'Erro ao fazer upload da foto de perfil.', details: error.message });
     }
 });
 
 // --- ROTA OPCIONAL PARA OBTER URL DA FOTO POR ID ---
-// Você pode não precisar desta rota se o upload já retorna a URL e você a armazena.
-// Mas é útil se você apenas tiver o ID da foto e precisar buscar a URL novamente.
+// Esta rota pode não ser tão necessária agora que a URL da foto de perfil
+// será retornada diretamente com os dados do membro.
 app.get('/get-photo-url/:fileId', async (req, res) => {
     const { fileId } = req.params;
     if (!fileId) {
@@ -179,12 +185,14 @@ app.get('/get-membros', async (req, res) => {
 });
 
 app.post('/presenca', async (req, res) => {
-    const { nome, data, hora, sheet } = req.body;
-    if (!nome || !data || !hora || !sheet) {
+    // Removido 'sheet' do destructuring pois não é usado e 'tipo' já é enviado pelo fetchFromAppsScript
+    const { nome, data, hora } = req.body; 
+    if (!nome || !data || !hora) { // 'sheet' não é mais um campo esperado no payload de presença
         return res.status(400).json({ success: false, message: 'Dados incompletos para registrar presença.' });
     }
     try {
-        const responseData = await fetchFromAppsScript('doPost', 'POST', { nome, data, hora, sheet });
+        // O tipo 'markPresence' é adicionado automaticamente pelo fetchFromAppsScript
+        const responseData = await fetchFromAppsScript('markPresence', 'POST', { nome, data, hora });
         
         res.status(200).json(responseData);
     } catch (error) {
