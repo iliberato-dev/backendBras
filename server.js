@@ -1,12 +1,9 @@
-// ------------------------------------------------------
-// Backend Node.js (server.js) - Atualizado
-// ------------------------------------------------------
 require('dotenv').config();
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const fetch = require('node-fetch');
+const fetch = require('node-fetch'); // Certifique-se de que 'node-fetch' está instalado: npm install node-fetch
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,7 +14,7 @@ const FRONTEND_URL = process.env.FRONTEND_URL;
 const APPS_SCRIPT_AUTH_TOKEN = process.env.APPS_SCRIPT_AUTH_TOKEN;
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
-const ADMIN_RI = process.env.ADMIN_RI;
+const ADMIN_RI = process.env.ADMIN_RI; // RI para login do administrador
 
 app.use(cors({
     origin: FRONTEND_URL,
@@ -60,6 +57,8 @@ async function fetchFromAppsScript(actionType, method = 'GET', body = null, quer
         }
         url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
     } else if (method === 'POST') {
+        // Para POST, o actionType já é inferido pelo caminho da rota no Apps Script (doPost)
+        // O token é adicionado ao corpo do JSON
         const postBody = { ...body, auth_token: APPS_SCRIPT_AUTH_TOKEN };
         options.body = JSON.stringify(postBody);
     } else {
@@ -141,12 +140,15 @@ app.get('/get-membros', async (req, res) => {
 });
 
 app.post('/presenca', async (req, res) => {
-    const { nome, data, hora, sheet } = req.body;
-    if (!nome || !data || !hora || !sheet) {
-        return res.status(400).json({ success: false, message: 'Dados incompletos para registrar presença.' });
+    // Apenas 'nome' é necessário no payload para o Apps Script
+    // 'data', 'hora' e 'sheet' são gerados/fixos no Apps Script e não devem vir do frontend.
+    const { nome } = req.body; // Remove data, hora, sheet do destructuring
+    if (!nome) {
+        return res.status(400).json({ success: false, message: 'Nome do membro é obrigatório para registrar presença.' });
     }
     try {
-        const responseData = await fetchFromAppsScript('doPost', 'POST', { nome, data, hora, sheet });
+        // Envia apenas o nome para o Apps Script. O Apps Script cuida da data/hora.
+        const responseData = await fetchFromAppsScript('doPost', 'POST', { nome }); 
         
         res.status(200).json(responseData);
     } catch (error) {
@@ -156,7 +158,8 @@ app.post('/presenca', async (req, res) => {
             return res.status(409).json({
                 success: false,
                 message: error.message,
-                lastPresence: error.lastPresence || { data, hora }
+                // lastPresence já vem formatado do Apps Script
+                lastPresence: error.lastPresence || null 
             });
         }
         
@@ -166,8 +169,11 @@ app.post('/presenca', async (req, res) => {
 
 app.get('/get-presencas-total', async (req, res) => {
     try {
+        // req.query já contém os parâmetros de filtro como periodo, lider, gape, etc.
         const data = await fetchFromAppsScript('presencasTotal', 'GET', null, req.query);
-        res.status(200).json(data.data || {});
+        // O Apps Script retorna { success: true, data: { ... } }
+        // Enviamos apenas o objeto 'data' com as contagens
+        res.status(200).json(data.data || {}); 
     } catch (error) {
         console.error('Erro no backend ao obter presenças totais:', error.message);
         res.status(500).json({ success: false, message: 'Erro ao obter presenças totais.', details: error.message });
@@ -177,7 +183,9 @@ app.get('/get-presencas-total', async (req, res) => {
 app.get('/get-all-last-presences', async (req, res) => {
     try {
         const data = await fetchFromAppsScript('getLastPresencesForAllMembers');
-        res.status(200).json(data.data || {});
+        // O Apps Script retorna { success: true, data: { ... } }
+        // Enviamos apenas o objeto 'data' com as últimas presenças
+        res.status(200).json(data.data || {}); 
     } catch (error) {
         console.error('Erro no backend ao obter todas as últimas presenças:', error.message);
         res.status(500).json({ success: false, message: 'Erro ao obter últimas presenças de todos os membros.', details: error.message });
@@ -194,7 +202,7 @@ app.post("/login", async (req, res) => {
         normalizeString(username) === normalizeString(ADMIN_USERNAME) && 
         password === ADMIN_RI) { // RI do admin deve ser exato
         console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
-        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: username });
+        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: username, role: 'admin' });
     }
 
     // 2. Se não for administrador, tenta autenticar como líder (usando cache)
@@ -295,10 +303,10 @@ app.post("/login", async (req, res) => {
 
                 if (isLeaderByRole) {
                     console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontradoPeloNome.Nome}`);
-                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!`, leaderName: membroEncontradoPeloNome.Nome });
+                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!`, leaderName: membroEncontradoPeloNome.Nome, role: 'leader' });
                 } else {
                     console.log(`Backend: Usuário '${username}' encontrado e senha correta, mas não tem o cargo/status de Líder ou não é líder de grupo.`);
-                    return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.' });
+                    return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.', role: 'member' });
                 }
             } else {
                 console.log(`Backend: Senha inválida para o usuário: ${username}`);
@@ -334,5 +342,6 @@ app.get('/get-faltas', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     console.log(`CORS configurado para permitir requisições de: ${FRONTEND_URL}`);
+    // Tenta pré-carregar o cache de membros na inicialização
     getMembrosWithCache().catch(err => console.error("Erro ao pré-carregar cache de membros na inicialização:", err.message));
 });
