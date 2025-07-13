@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Versão com Login 100% CORRETO
+// Backend Node.js (server.js) - Versão com Rota /get-presencas-total CORRIGIDA
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -52,8 +52,15 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
 
     try {
         const response = await fetch(url.toString(), options);
-        const data = await response.json();
-        if (!response.ok || data.success === false) {
+        // Lida com respostas que não são JSON (como páginas de erro do Google)
+        const responseText = await response.text();
+        if (!response.ok) {
+            // Se o status não for OK, lança o erro com o texto da resposta
+             throw new Error(`Erro do Apps Script (Status ${response.status}): ${responseText}`);
+        }
+
+        const data = JSON.parse(responseText);
+        if (data.success === false) {
             throw new Error(data.message || 'Erro desconhecido retornado pelo Apps Script.');
         }
         return data;
@@ -85,10 +92,8 @@ function normalizeString(str) {
     return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 }
 
-
 // --- ROTAS DA API ---
 
-// ... (outras rotas como /get-membros, /presenca, etc. permanecem aqui) ...
 app.get('/get-membros', async (req, res) => {
     try {
         const data = await getMembrosWithCache();
@@ -97,6 +102,7 @@ app.get('/get-membros', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
+
 app.get('/get-all-last-presences', async (req, res) => {
     try {
         const data = await fetchFromAppsScript({ tipo: 'getLastPresencesForAllMembers' });
@@ -105,6 +111,18 @@ app.get('/get-all-last-presences', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
+
+// ROTA RESTAURADA
+app.get('/get-presencas-total', async (req, res) => {
+    try {
+        // Encaminha os parâmetros de query (periodo, lider, gape) para o Apps Script
+        const data = await fetchFromAppsScript({ tipo: 'presencasTotal', ...req.query });
+        res.status(200).json(data);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 app.get('/presences/:memberName', async (req, res) => {
     try {
         const { memberName } = req.params;
@@ -114,6 +132,7 @@ app.get('/presences/:memberName', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
+
 app.post('/presenca', async (req, res) => {
     try {
         const responseData = await fetchFromAppsScript({}, 'POST', req.body);
@@ -122,7 +141,56 @@ app.post('/presenca', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
+
+app.post("/login", async (req, res) => {
+    const { username, password } = req.body;
+    console.log(`Backend: Tentativa de login para usuário: "${username}"`);
+
+    if (ADMIN_USERNAME && ADMIN_RI && normalizeString(username) === normalizeString(ADMIN_USERNAME) && password === ADMIN_RI) {
+        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: 'admin' });
+    }
+
+    try {
+        const responseData = await getMembrosWithCache();
+        const membros = responseData.membros || [];
+        if (membros.length === 0) return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar dados de membros.' });
+
+        const usernameNormalized = normalizeString(username);
+        const passwordDigitado = String(password || '').trim();
+        const membroEncontrado = membros.find(m => normalizeString(m.Nome || '').includes(usernameNormalized));
+
+        if (membroEncontrado) {
+            if (String(membroEncontrado.RI || '').trim() === passwordDigitado) {
+                let isLeader = false;
+                const cargoMembro = normalizeString(membroEncontrado.Cargo || '');
+                const statusMembro = normalizeString(membroEncontrado.Status || '');
+
+                if (cargoMembro.includes('lider') || statusMembro.includes('lider')) {
+                    isLeader = true;
+                } else {
+                    const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
+                    isLeader = membros.some(outroMembro => normalizeString(outroMembro.Lider || '').includes(nomeDoMembroLogando));
+                }
+
+                if (isLeader) {
+                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontrado.Nome}!`, leaderName: membroEncontrado.Nome });
+                } else {
+                    return res.status(401).json({ success: false, message: 'Usuário não possui permissão de líder.' });
+                }
+            } else {
+                return res.status(401).json({ success: false, message: 'Senha (RI) inválida.' });
+            }
+        } else {
+            return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
+        }
+    } catch (error) {
+        console.error("Backend: Erro fatal ao autenticar:", error.message);
+        return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.' });
+    }
+});
+
 app.get('/status', (req, res) => res.status(200).json({ status: 'API Online' }));
+
 app.get('/get-faltas', async (req, res) => {
     try {
         const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
@@ -131,94 +199,6 @@ app.get('/get-faltas', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-
-
-// ROTA DE LOGIN COM A LÓGICA ORIGINAL E FLEXÍVEL RESTAURADA
-app.post("/login", async (req, res) => {
-    const { username, password } = req.body;
-    console.log(`Backend: Tentativa de login para usuário: "${username}"`);
-
-    // 1. Autenticação do Administrador Master
-    if (ADMIN_USERNAME && ADMIN_RI && 
-        normalizeString(username) === normalizeString(ADMIN_USERNAME) && 
-        password === ADMIN_RI) {
-        console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
-        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: 'admin' });
-    }
-
-    // 2. Autenticação de Líder
-    try {
-        const responseData = await getMembrosWithCache();
-        const membros = responseData.membros || [];
-        
-        if (membros.length === 0) {
-            return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar os dados de membros.' });
-        }
-
-        const usernameNormalized = normalizeString(username);
-        const passwordDigitado = String(password || '').trim();
-
-        const membroEncontrado = membros.find(membro => 
-            normalizeString(membro.Nome || '').includes(usernameNormalized)
-        );
-
-        if (membroEncontrado) {
-            console.log(`Backend Login: Membro encontrado: ${membroEncontrado.Nome}`);
-            
-            if (String(membroEncontrado.RI || '').trim() === passwordDigitado) {
-                
-                let isLeader = false;
-                const cargoMembro = normalizeString(membroEncontrado.Cargo || '');
-                const statusMembro = normalizeString(membroEncontrado.Status || '');
-
-                if (cargoMembro.includes('lider') || statusMembro.includes('lider')) {
-                    isLeader = true;
-                    console.log(`Backend: ${membroEncontrado.Nome} é líder por cargo/status.`);
-                }
-
-                if (!isLeader) {
-                    const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
-                    console.log(`Verificação 2: Buscando se '${nomeDoMembroLogando}' é líder de algum grupo.`);
-
-                    isLeader = membros.some(outroMembro => {
-                        const liderNaPlanilha = String(outroMembro.Lider || '').trim();
-                        const nomeLiderNormalizado = normalizeString(liderNaPlanilha);
-                        
-                        // LOG para depuração
-                        console.log(`   Comparando: [Líder na planilha: '${nomeLiderNormalizado}'] vs [Usuário logando: '${nomeDoMembroLogando}']`);
-
-                        // A verificação correta: um nome contém o outro para cobrir abreviações e nomes completos
-                        const match = nomeDoMembroLogando.includes(nomeLiderNormalizado) || nomeLiderNormalizado.includes(nomeDoMembroLogando);
-                        if(match) console.log('   --> MATCH!');
-                        return match;
-                    });
-
-                    if(isLeader) console.log(`Backend: ${membroEncontrado.Nome} validado como líder por estar na coluna 'Grupo Líder'.`);
-                }
-
-                if (isLeader) {
-                    console.log(`Backend: Login BEM-SUCEDIDO para o líder: ${membroEncontrado.Nome}`);
-                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontrado.Nome}!`, leaderName: membroEncontrado.Nome });
-                } else {
-                    console.log(`Backend: Usuário '${username}' encontrado, mas não possui permissão de líder.`);
-                    return res.status(401).json({ success: false, message: 'Usuário não possui permissão de líder.' });
-                }
-
-            } else {
-                console.log(`Backend: Senha (RI) inválida para o usuário: ${username}`);
-                return res.status(401).json({ success: false, message: 'Senha (RI) inválida.' });
-            }
-        } else {
-            console.log(`Backend: Usuário '${username}' não encontrado.`);
-            return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
-        }
-
-    } catch (error) {
-        console.error("Backend: Erro fatal ao autenticar:", error.message);
-        return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.' });
-    }
-});
-
 
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
