@@ -60,7 +60,7 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
         }
         return data;
     } catch (error) {
-        if (error instanceof SyntaxError) { // Captura especificamente erros de JSON
+        if (error instanceof SyntaxError) {
             throw new Error('Resposta inválida do Apps Script (não é JSON). O script pode ter travado.');
         }
         throw error;
@@ -69,10 +69,8 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
 
 async function getMembrosWithCache() {
     if (cachedMembros && (Date.now() - lastMembrosFetchTime < MEMBERS_CACHE_TTL)) {
-        console.log("Backend: Retornando membros do cache.");
         return { success: true, membros: cachedMembros };
     }
-    console.log("Backend: Buscando membros do Apps Script.");
     const data = await fetchFromAppsScript({ tipo: 'getMembros' });
     if (data.success) {
         cachedMembros = data.membros;
@@ -118,7 +116,7 @@ app.get('/get-presencas-total', async (req, res) => {
 app.get('/presences/:memberName', async (req, res) => {
     try {
         const { memberName } = req.params;
-        const data = await fetchFromAppsScript({ tipo: 'getPresencesByMember', nome: memberName });
+        const data = await fetchFromAppsScript({ tipo: 'getPresencesByMember', nome: memberName, ...req.query });
         res.status(200).json(data);
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
