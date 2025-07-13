@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - VERSÃO COMPLETA E FINAL
+// Backend Node.js (server.js) - VERSÃO ATUALIZADA COM OTIMIZAÇÃO DE CACHE
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -22,10 +22,15 @@ const ADMIN_RI = process.env.ADMIN_RI;
 app.use(cors({ origin: FRONTEND_URL }));
 app.use(bodyParser.json());
 
-// --- CACHE DE MEMBROS ---
+// --- LÓGICA DE CACHE ---
 let cachedMembros = null;
 let lastMembrosFetchTime = 0;
 const MEMBERS_CACHE_TTL = 5 * 60 * 1000; // Cache de 5 minutos
+
+// NOVO: Variáveis de cache para as últimas presenças
+let cachedLastPresences = null;
+let lastPresencesFetchTime = 0;
+const LAST_PRESENCES_CACHE_TTL = 2 * 60 * 1000; // Cache de 2 minutos para dados que mudam mais rápido
 
 // --- FUNÇÃO UTILITÁRIA PARA REQUISIÇÕES AO APPS SCRIPT ---
 async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null) {
@@ -60,7 +65,7 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
         }
         return data;
     } catch (error) {
-        if (error instanceof SyntaxError) { // Captura especificamente erros de JSON
+        if (error instanceof SyntaxError) {
             throw new Error('Resposta inválida do Apps Script (não é JSON). O script pode ter travado.');
         }
         throw error;
@@ -81,6 +86,21 @@ async function getMembrosWithCache() {
     return data;
 }
 
+// NOVO: Função de cache para últimas presenças
+async function getLastPresencesWithCache() {
+    if (cachedLastPresences && (Date.now() - lastPresencesFetchTime < LAST_PRESENCES_CACHE_TTL)) {
+        console.log("Backend: Retornando últimas presenças do cache.");
+        return { success: true, data: cachedLastPresences };
+    }
+    console.log("Backend: Buscando últimas presenças do Apps Script.");
+    const data = await fetchFromAppsScript({ tipo: 'getLastPresencesForAllMembers' });
+    if (data.success) {
+        cachedLastPresences = data.data;
+        lastPresencesFetchTime = Date.now();
+    }
+    return data;
+}
+
 function normalizeString(str) {
     if (typeof str !== 'string') return '';
     return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
@@ -97,9 +117,10 @@ app.get('/get-membros', async (req, res) => {
     }
 });
 
+// ROTA ATUALIZADA para usar o novo cache
 app.get('/get-all-last-presences', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript({ tipo: 'getLastPresencesForAllMembers' });
+        const data = await getLastPresencesWithCache();
         res.status(200).json(data);
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -118,15 +139,21 @@ app.get('/get-presencas-total', async (req, res) => {
 app.get('/presences/:memberName', async (req, res) => {
     try {
         const { memberName } = req.params;
-        const data = await fetchFromAppsScript({ tipo: 'getPresencesByMember', nome: memberName });
+        const data = await fetchFromAppsScript({ tipo: 'getPresencesByMember', nome: memberName, ...req.query });
         res.status(200).json(data);
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 });
 
+// ROTA ATUALIZADA para invalidar o cache
 app.post('/presenca', async (req, res) => {
     try {
+        // Invalida o cache de últimas presenças sempre que uma presença é adicionada ou removida.
+        cachedLastPresences = null;
+        lastPresencesFetchTime = 0;
+        console.log("Backend: Cache de últimas presenças invalidado devido a uma nova ação.");
+
         const responseData = await fetchFromAppsScript({}, 'POST', req.body);
         res.status(200).json(responseData);
     } catch (error) {
