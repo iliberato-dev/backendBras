@@ -146,6 +146,15 @@ app.get('/presences/:memberName', async (req, res) => {
     }
 });
 
+app.get('/detailed-summary', async (req, res) => {
+    try {
+        const data = await fetchFromAppsScript({ tipo: 'getDetailedSummary', ...req.query });
+        res.status(200).json(data);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // ROTA ATUALIZADA para invalidar o cache
 app.post('/presenca', async (req, res) => {
     try {
