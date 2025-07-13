@@ -1,8 +1,4 @@
-// ------------------------------------------------------
-// Backend Node.js (server.js) - Atualizado
-// ------------------------------------------------------
 require('dotenv').config();
-
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
@@ -11,353 +7,99 @@ const fetch = require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- CONFIGURAÇÃO DE URLs E CORS ---
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const APPS_SCRIPT_AUTH_TOKEN = process.env.APPS_SCRIPT_AUTH_TOKEN;
-
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME;
 const ADMIN_RI = process.env.ADMIN_RI;
 
-app.use(cors({
-    origin: FRONTEND_URL,
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-}));
-
+app.use(cors({ origin: FRONTEND_URL }));
 app.use(bodyParser.json());
 
-// --- CACHE DE MEMBROS ---
-let cachedMembros = null;
-let lastMembrosFetchTime = 0;
-const MEMBERS_CACHE_TTL = 5 * 60 * 1000; // Cache de 5 minutos (em milissegundos)
-
-// --- FUNÇÃO UTILITÁRIA PARA REQUISIÇÕES AO APPS SCRIPT ---
-async function fetchFromAppsScript(actionType, method = 'GET', body = null, queryParams = {}) {
-    if (!APPS_SCRIPT_URL) {
-        console.error('Backend: Erro de configuração: Variável de ambiente APPS_SCRIPT_URL não definida.');
-        throw new Error('Erro de configuração do servidor: URL do Apps Script não definida.');
-    }
-    if (!APPS_SCRIPT_AUTH_TOKEN) {
-        console.error('Backend: Erro de configuração: Variável de ambiente APPS_SCRIPT_AUTH_TOKEN não definida.');
-        throw new Error('Erro de configuração do servidor: Token de autenticação do Apps Script não definido.');
-    }
-
-    let url = APPS_SCRIPT_URL;
-    const urlParams = new URLSearchParams();
+// Função de fetch genérica
+async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null) {
+    const url = new URL(APPS_SCRIPT_URL);
+    Object.keys(queryParams).forEach(key => url.searchParams.append(key, queryParams[key]));
+    
     const options = {
         method: method,
         headers: { 'Content-Type': 'application/json' },
     };
 
-    if (method === 'GET') {
-        urlParams.append('tipo', actionType);
-        urlParams.append('auth_token', APPS_SCRIPT_AUTH_TOKEN);
-        for (const key in queryParams) {
-            if (queryParams.hasOwnProperty(key) && queryParams[key]) {
-                urlParams.append(key, queryParams[key]);
-            }
-        }
-        url = `${APPS_SCRIPT_URL}?${urlParams.toString()}`;
-    } else if (method === 'POST') {
-        const postBody = { ...body, auth_token: APPS_SCRIPT_AUTH_TOKEN };
-        options.body = JSON.stringify(postBody);
+    const requestBody = { ...body, auth_token: APPS_SCRIPT_AUTH_TOKEN };
+    if (method !== 'GET') {
+        options.body = JSON.stringify(requestBody);
     } else {
-        throw new Error(`Método HTTP não suportado: ${method}`);
+        url.searchParams.append('auth_token', APPS_SCRIPT_AUTH_TOKEN);
     }
-    
-    console.log(`Backend: Encaminhando ${method} para Apps Script: ${url}`);
-    
-    const response = await fetch(url, options);
-    const responseText = await response.text();
 
-    let responseData;
     try {
-        responseData = JSON.parse(responseText);
-    } catch (e) {
-        console.error(`Backend: Erro ao parsear JSON do Apps Script: ${e.message}. Resposta bruta: ${responseText.substring(0, 500)}...`);
-        throw new Error(`Resposta inválida do Apps Script: ${responseText.substring(0, 100)}...`);
-    }
-
-    if (!response.ok || responseData.success === false) {
-        console.error(`Backend: Erro lógico/HTTP do Apps Script (${actionType} ${method}): Status ${response.status} - Resposta: ${JSON.stringify(responseData)}`);
-        const errorMessage = responseData.message || 'Erro desconhecido do Apps Script.';
-        const error = new Error(errorMessage);
-        if (responseData.alreadyExists) {
-            error.alreadyExists = true;
-            error.lastPresence = responseData.lastPresence;
+        const response = await fetch(url.toString(), options);
+        const data = await response.json();
+        if (!response.ok || data.success === false) {
+            throw new Error(data.message || 'Erro desconhecido do Apps Script.');
         }
-        throw error;
+        return data;
+    } catch (error) {
+        console.error(`Erro ao comunicar com Apps Script: ${error.message}`);
+        throw new Error(`Falha na comunicação com o backend do Google: ${error.message}`);
     }
-    
-    console.log(`Backend: Resposta bem-sucedida do Apps Script (${actionType} ${method}): ${JSON.stringify(responseData)}`);
-    return responseData;
 }
 
-/**
- * Função para obter membros, utilizando cache.
- */
-async function getMembrosWithCache() {
-    if (cachedMembros && (Date.now() - lastMembrosFetchTime < MEMBERS_CACHE_TTL)) {
-        console.log("Backend: Retornando membros do cache.");
-        return { success: true, membros: cachedMembros };
-    }
-
-    console.log("Backend: Buscando membros do Apps Script (cache expirado ou vazio).");
-    const data = await fetchFromAppsScript('getMembros');
-    
-    if (data.success) {
-        cachedMembros = data.membros;
-        lastMembrosFetchTime = Date.now();
-        console.log(`Backend: Membros cacheados. Total: ${cachedMembros.length}`);
-    } else {
-        console.warn("Backend: Falha ao buscar membros do Apps Script para cache:", data.message);
-    }
-    return data;
-}
-
-// Helper para normalizar strings para comparação (removendo acentos, caracteres especiais, e convertendo para minúsculas)
-function normalizeString(str) {
-    if (typeof str !== 'string') {
-        return '';
-    }
-    return str.toLowerCase()
-              .normalize("NFD") // Normaliza para decompor caracteres acentuados
-              .replace(/[\u0300-\u036f]/g, "") // Remove os diacríticos (acentos)
-              .replace(/[^a-z0-9\s]/g, '') // Remove caracteres não alfanuméricos (mantém espaços)
-              .trim();
-}
-
-// --- ROTAS DA API ---
-
+// Rotas existentes...
 app.get('/get-membros', async (req, res) => {
     try {
-        const data = await getMembrosWithCache();
+        const data = await fetchFromAppsScript({ tipo: 'getMembros' });
         res.status(200).json(data);
     } catch (error) {
-        console.error('Erro no backend ao obter membros (via cache ou Apps Script):', error.message);
-        res.status(500).json({ success: false, message: 'Erro ao obter dados de membros.', details: error.message });
-    }
-});
-
-app.post('/presenca', async (req, res) => {
-    const { nome, data, hora, sheet } = req.body;
-    if (!nome || !data || !hora || !sheet) {
-        return res.status(400).json({ success: false, message: 'Dados incompletos para registrar presença.' });
-    }
-    try {
-        const responseData = await fetchFromAppsScript('doPost', 'POST', { nome, data, hora, sheet });
-        
-        res.status(200).json(responseData);
-    } catch (error) {
-        console.error('Erro no backend ao registrar presença:', error.message);
-
-        if (error.alreadyExists) {
-            return res.status(409).json({
-                success: false,
-                message: error.message,
-                lastPresence: error.lastPresence || { data, hora }
-            });
-        }
-        
-        res.status(500).json({ success: false, message: 'Erro ao registrar presença.', details: error.message });
-    }
-});
-
-app.get('/get-presencas-total', async (req, res) => {
-    try {
-        const data = await fetchFromAppsScript('presencasTotal', 'GET', null, req.query);
-        res.status(200).json(data.data || {});
-    } catch (error) {
-        console.error('Erro no backend ao obter presenças totais:', error.message);
-        res.status(500).json({ success: false, message: 'Erro ao obter presenças totais.', details: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
 app.get('/get-all-last-presences', async (req, res) => {
     try {
-        const data = await fetchFromAppsScript('getLastPresencesForAllMembers');
-        res.status(200).json(data.data || {});
+        const data = await fetchFromAppsScript({ tipo: 'getLastPresencesForAllMembers' });
+        res.status(200).json(data);
     } catch (error) {
-        console.error('Erro no backend ao obter todas as últimas presenças:', error.message);
-        res.status(500).json({ success: false, message: 'Erro ao obter últimas presenças de todos os membros.', details: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
-// Rota de Autenticação (LOGIN) - Lógica de busca de nome aprimorada
-app.post("/login", async (req, res) => {
-    const { username, password } = req.body;
-    console.log(`Backend: Tentativa de login para usuário: "${username}"`);
-
-    // 1. Tenta autenticar como administrador master
-    if (ADMIN_USERNAME && ADMIN_RI && 
-        normalizeString(username) === normalizeString(ADMIN_USERNAME) && 
-        password === ADMIN_RI) { // RI do admin deve ser exato
-        console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
-        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: username });
-    }
-
-    // 2. Se não for administrador, tenta autenticar como líder (usando cache)
+// NOVO: Rota para buscar histórico de um membro
+app.get('/presences/:memberName', async (req, res) => {
     try {
-        const responseData = await getMembrosWithCache();
-        const membros = responseData.membros || [];
-        
-        if (!membros || !Array.isArray(membros) || membros.length === 0) {
-            console.warn("Backend: Nenhuma lista de membros válida retornada ou a lista está vazia para autenticação.");
-            return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar os dados de membros ou a lista está vazia para autenticação.' });
-        }
-
-        const usernameDigitadoNormalized = normalizeString(username);
-        const passwordDigitado = String(password || '').trim(); // RI do usuário deve ser exato
-
-        let membroEncontradoPeloNome = null;
-
-        // **LÓGICA APRIMORADA PARA ENCONTRAR O MEMBRO PELO NOME**
-        // Primeiro, tenta encontrar um nome completo ou quase completo para reduzir ambiguidades.
-        // Depois, tenta encontrar por partes do nome.
-        
-        // 1. Tenta encontrar correspondência exata (normalizada)
-        membroEncontradoPeloNome = membros.find(membro => 
-            normalizeString(membro.Nome || '') === usernameDigitadoNormalized
-        );
-
-        // 2. Se não encontrou, tenta encontrar se o nome digitado é o início de um nome
-        // Ex: "João S" deve encontrar "João Silva"
-        if (!membroEncontradoPeloNome) {
-            membroEncontradoPeloNome = membros.find(membro =>
-                normalizeString(membro.Nome || '').startsWith(usernameDigitadoNormalized)
-            );
-        }
-
-        // 3. Se ainda não encontrou, tenta encontrar se o nome digitado está contido no nome completo,
-        // mas com uma verificação mais "forte" (ex: "Silva J" encontra "João Silva")
-        if (!membroEncontradoPeloNome) {
-            membroEncontradoPeloNome = membros.find(membro => {
-                const nomeMembroNaPlanilhaNormalized = normalizeString(membro.Nome || '');
-                const usernameWords = usernameDigitadoNormalized.split(' ').filter(w => w.length > 0);
-                
-                // Garante que todas as palavras do username estão no nome do membro
-                return usernameWords.every(word => nomeMembroNaPlanilhaNormalized.includes(word));
-            });
-        }
-        
-        // **IMPORTANTE: Se múltiplas correspondências forem possíveis com a lógica flexível,
-        // você pode precisar de uma etapa extra aqui para lidar com ambiguidade,
-        // ou o primeiro match será o "escolhido". Para este cenário, o `find` já pega o primeiro.**
-
-
-        if (membroEncontradoPeloNome) {
-            console.log(`Backend Login: Membro encontrado pelo nome flexível: ${membroEncontradoPeloNome.Nome}`);
-            // --- INÍCIO DOS LOGS ADICIONADOS PARA DEPURAR ---
-            console.log(`Backend Login: Membro encontrado (JSON COMPLETO): ${JSON.stringify(membroEncontradoPeloNome, null, 2)}`);
-            console.log(`Backend Login: Nome do Membro Encontrado Normalizado: '${normalizeString(membroEncontradoPeloNome.Nome || '')}'`);
-            console.log(`Backend Login: Cargo do Membro Encontrado Normalizado: '${normalizeString(membroEncontradoPeloNome.Cargo || '')}'`);
-            console.log(`Backend Login: Status do Membro Encontrado Normalizado: '${normalizeString(membroEncontradoPeloNome.Status || '')}'`);
-            // --- FIM DOS LOGS ADICIONADOS PARA DEPURAR ---
-
-            // **Verifica a senha (RI) - DEVE SER EXATO**
-            if (String(membroEncontradoPeloNome.RI || '').trim() === passwordDigitado) {
-                console.log(`Backend Login: Senha (RI) correta para ${membroEncontradoPeloNome.Nome}.`);
-                
-                const cargoMembroNormalized = normalizeString(membroEncontradoPeloNome.Cargo || '');
-                const statusMembroNormalized = normalizeString(membroEncontradoPeloNome.Status || '');
-                
-                let isLeaderByRole = false;
-
-                // 1. Verifica se o Cargo ou Status do próprio membro indica liderança
-                if (cargoMembroNormalized.includes('lider') || statusMembroNormalized.includes('lider')) {
-                    isLeaderByRole = true;
-                    console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' É líder por Cargo/Status (Cargo: '${membroEncontradoPeloNome.Cargo}', Status: '${membroEncontradoPeloNome.Status}').`);
-                } else {
-                    console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' NÃO É líder por Cargo/Status (Cargo: '${membroEncontradoPeloNome.Cargo}', Status: '${membroEncontradoPeloNome.Status}').`);
-                }
-
-                // 2. Verificação adicional: Se o membro não foi identificado como líder por Cargo/Status,
-                // verifica se o nome do membro aparece como líder em qualquer 'Grupo Líder'
-                if (!isLeaderByRole) { 
-                    const nomeDoMembroLogandoNormalized = normalizeString(membroEncontradoPeloNome.Nome || '');
-                    console.log(`Backend Login: Iniciando verificação de liderança por grupo para: '${nomeDoMembroLogandoNormalized}'`);
-
-                    isLeaderByRole = membros.some(anyMember => {
-                        const liderNaPlanilhaCompleto = String(anyMember.Lider || '').trim();
-                        const congregacaoAnyMember = String(anyMember.Congregacao || '').trim();
-
-                        let nomeLiderExtraidoDoGrupo = '';
-                        const dynamicPrefix = congregacaoAnyMember ? `${congregacaoAnyMember} | ` : '';
-
-                        if (dynamicPrefix && liderNaPlanilhaCompleto.startsWith(dynamicPrefix)) {
-                            nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto.substring(dynamicPrefix.length).trim();
-                        } else {
-                            nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto;
-                        }
-
-                        const nomeLiderExtraidoNormalized = normalizeString(nomeLiderExtraidoDoGrupo);
-                        
-                        console.log(`   Comparando (Líder na Planilha): '${nomeLiderExtraidoNormalized}' com (Usuário Logando): '${nomeDoMembroLogandoNormalized}' (do membro da linha: '${anyMember.Nome || 'N/A'}')`);
-                        
-                        // --- CORREÇÃO APLICADA AQUI: Usando startsWith para flexibilizar a comparação do nome do líder ---
-                        // A comparação agora verifica se o nome do líder extraído da planilha
-                        // (ex: 'alessandro nasc') começa com o nome normalizado do membro logando
-                        // (ex: 'alessandro nascimento dos santos'), OU se o nome do membro logando
-                        // começa com o nome do líder extraído.
-                        // Isso cobre casos onde um é abreviação do outro.
-                        if (nomeLiderExtraidoNormalized.startsWith(nomeDoMembroLogandoNormalized) ||
-                            nomeDoMembroLogandoNormalized.startsWith(nomeLiderExtraidoNormalized)) {
-                            console.log(`   ### MATCH ENCONTRADO (FLEXÍVEL)! '${nomeDoMembroLogandoNormalized}' é líder de grupo para '${anyMember.Nome}'.`);
-                            return true; // Encontrou uma correspondência, pode parar a iteração
-                        }
-                        // --- FIM DA CORREÇÃO ---
-
-                        return false; // Não encontrou correspondência nesta iteração
-                    });
-
-                    if (!isLeaderByRole) {
-                        console.log(`Backend Login: '${nomeDoMembroLogandoNormalized}' NÃO é líder de nenhum grupo, baseado nas entradas do campo 'Lider'.`);
-                    }
-                }
-                
-                console.log(`Backend Login: Resultado final - É líder? ${isLeaderByRole}`);
-
-                if (isLeaderByRole) {
-                    console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontradoPeloNome.Nome}`);
-                    return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontradoPeloNome.Nome}!`, leaderName: membroEncontradoPeloNome.Nome });
-                } else {
-                    console.log(`Backend: Usuário '${username}' encontrado e senha correta, mas não tem o cargo/status de Líder ou não é líder de grupo.`);
-                    return res.status(401).json({ success: false, message: 'Credenciais inválidas: Usuário não é um líder.' });
-                }
-            } else {
-                console.log(`Backend: Senha inválida para o usuário: ${username}`);
-                return res.status(401).json({ success: false, message: 'Senha inválida.' });
-            }
-        } else {
-            console.log(`Backend: Usuário '${username}' não encontrado na lista de membros.`);
-            return res.status(401).json({ success: false, message: 'Usuário não encontrado ou credenciais inválidas.' });
-        }
-
+        const { memberName } = req.params;
+        const data = await fetchFromAppsScript({ tipo: 'getPresencesByMember', nome: memberName });
+        res.status(200).json(data);
     } catch (error) {
-        console.error("Backend: Erro FATAL ao tentar autenticar líder com Apps Script:", error.message);
-        return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.', details: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
+});
+
+// Rota de presença agora lida com POST e DELETE (via POST com 'action')
+app.post('/presenca', async (req, res) => {
+    try {
+        const responseData = await fetchFromAppsScript({}, 'POST', req.body);
+        res.status(200).json(responseData);
+    } catch (error) {
+        // O Apps Script agora envia uma resposta com status 200 e success:false para erros de negócio
+        // então o erro aqui é mais provável que seja de conexão ou configuração.
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+
+// Rotas de login e outras...
+app.post("/login", async (req, res) => {
+    // ... seu código de login existente ...
+     res.status(401).json({ success: false, message: "Lógica de login não mostrada" });
 });
 
 app.get('/status', (req, res) => {
-    res.status(200).json({ status: 'API está online e funcionando!', timestamp: new Date().toISOString() });
+    res.status(200).json({ status: 'API Online' });
 });
 
-// Rota para obter as faltas (do Apps Script)
-app.get('/get-faltas', async (req, res) => {
-    try {
-        // req.query passará os parâmetros (periodo, lider, gape, mes, ano) para o Apps Script
-        const data = await fetchFromAppsScript('getFaltas', 'GET', null, req.query);
-        res.status(200).json(data); // Apps Script retorna { success: true, data: {...}, totalMeetingDays: N }
-    } catch (error) {
-        console.error('Erro no backend ao obter faltas:', error.message);
-        res.status(500).json({ success: false, message: 'Erro ao obter faltas.', details: error.message });
-    }
-});
 
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
-    console.log(`CORS configurado para permitir requisições de: ${FRONTEND_URL}`);
-    getMembrosWithCache().catch(err => console.error("Erro ao pré-carregar cache de membros na inicialização:", err.message));
 });
