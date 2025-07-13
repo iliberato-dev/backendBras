@@ -248,6 +248,13 @@ app.post("/login", async (req, res) => {
 
         if (membroEncontradoPeloNome) {
             console.log(`Backend Login: Membro encontrado pelo nome flexível: ${membroEncontradoPeloNome.Nome}`);
+            // --- INÍCIO DOS LOGS ADICIONADOS PARA DEPURAR ---
+            console.log(`Backend Login: Membro encontrado (JSON COMPLETO): ${JSON.stringify(membroEncontradoPeloNome, null, 2)}`);
+            console.log(`Backend Login: Nome do Membro Encontrado Normalizado: '${normalizeString(membroEncontradoPeloNome.Nome || '')}'`);
+            console.log(`Backend Login: Cargo do Membro Encontrado Normalizado: '${normalizeString(membroEncontradoPeloNome.Cargo || '')}'`);
+            console.log(`Backend Login: Status do Membro Encontrado Normalizado: '${normalizeString(membroEncontradoPeloNome.Status || '')}'`);
+            // --- FIM DOS LOGS ADICIONADOS PARA DEPURAR ---
+
             // **Verifica a senha (RI) - DEVE SER EXATO**
             if (String(membroEncontradoPeloNome.RI || '').trim() === passwordDigitado) {
                 console.log(`Backend Login: Senha (RI) correta para ${membroEncontradoPeloNome.Nome}.`);
@@ -260,14 +267,16 @@ app.post("/login", async (req, res) => {
                 // 1. Verifica se o Cargo ou Status do próprio membro indica liderança
                 if (cargoMembroNormalized.includes('lider') || statusMembroNormalized.includes('lider')) {
                     isLeaderByRole = true;
-                    console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' é líder por Cargo/Status.`);
+                    console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' É líder por Cargo/Status (Cargo: '${membroEncontradoPeloNome.Cargo}', Status: '${membroEncontradoPeloNome.Status}').`);
+                } else {
+                    console.log(`Backend Login: Membro '${membroEncontradoPeloNome.Nome}' NÃO É líder por Cargo/Status (Cargo: '${membroEncontradoPeloNome.Cargo}', Status: '${membroEncontradoPeloNome.Status}').`);
                 }
 
                 // 2. Verificação adicional: Se o membro não foi identificado como líder por Cargo/Status,
                 // verifica se o nome do membro aparece como líder em qualquer 'Grupo Líder'
                 if (!isLeaderByRole) { 
                     const nomeDoMembroLogandoNormalized = normalizeString(membroEncontradoPeloNome.Nome || '');
-                    console.log(`Backend Login: Verificando se '${nomeDoMembroLogandoNormalized}' aparece como líder em algum grupo...`);
+                    console.log(`Backend Login: Iniciando verificação de liderança por grupo para: '${nomeDoMembroLogandoNormalized}'`);
 
                     isLeaderByRole = membros.some(anyMember => {
                         const liderNaPlanilhaCompleto = String(anyMember.Lider || '').trim();
@@ -282,13 +291,24 @@ app.post("/login", async (req, res) => {
                             nomeLiderExtraidoDoGrupo = liderNaPlanilhaCompleto;
                         }
 
-                        // Compara o nome normalizado do membro que está logando com o nome do líder extraído (também normalizado)
-                        return normalizeString(nomeLiderExtraidoDoGrupo) === nomeDoMembroLogandoNormalized;
-                        // Poderíamos usar uma lógica de "startsWith" aqui também se os nomes de líderes forem abreviados na planilha.
-                        // Ex: `normalizeString(nomeLiderExtraidoDoGrupo).startsWith(nomeDoMembroLogandoNormalized)`
-                        // ou a lógica de `every` se o nome do líder na planilha for abreviado mas as palavras batem.
-                        // Mas para correspondência do nome do líder com o nome do membro, geralmente é mais exato.
+                        const nomeLiderExtraidoNormalized = normalizeString(nomeLiderExtraidoDoGrupo);
+                        
+                        console.log(`   Comparando (Líder na Planilha): '${nomeLiderExtraidoNormalized}' com (Usuário Logando): '${nomeDoMembroLogandoNormalized}' (do membro da linha: '${anyMember.Nome || 'N/A'}')`);
+                        
+                        // Você pode tentar as alternativas aqui se a correspondência exata não funcionar:
+                        // return nomeLiderExtraidoNormalized.startsWith(nomeDoMembroLogandoNormalized);
+                        // return nomeLiderExtraidoNormalized.includes(nomeDoMembroLogandoNormalized);
+                        
+                        if (nomeLiderExtraidoNormalized === nomeDoMembroLogandoNormalized) {
+                            console.log(`   ### MATCH ENCONTRADO! '${nomeDoMembroLogandoNormalized}' é líder de grupo para '${anyMember.Nome}'.`);
+                            return true; // Encontrou uma correspondência, pode parar a iteração
+                        }
+                        return false; // Não encontrou correspondência nesta iteração
                     });
+
+                    if (!isLeaderByRole) {
+                        console.log(`Backend Login: '${nomeDoMembroLogandoNormalized}' NÃO é líder de nenhum grupo, baseado nas entradas do campo 'Lider'.`);
+                    }
                 }
                 
                 console.log(`Backend Login: Resultado final - É líder? ${isLeaderByRole}`);
