@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Versão com Login CORRETO
+// Backend Node.js (server.js) - Versão com Login COMPLETO e CORRETO
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -54,13 +54,11 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
         const response = await fetch(url.toString(), options);
         const data = await response.json();
         if (!response.ok || data.success === false) {
-             // Mesmo que a resposta seja 200 OK, se o success for false, consideramos um erro de negócio
             throw new Error(data.message || 'Erro desconhecido retornado pelo Apps Script.');
         }
         return data;
     } catch (error) {
         console.error(`Erro ao comunicar com Apps Script: ${error.message}`);
-        // Se o erro for de parse de JSON, significa que o Apps Script retornou HTML (crash)
         if (error.name === 'FetchError' || error.message.includes('invalid json')) {
              throw new Error('Resposta inválida do Apps Script. O script pode ter travado.');
         }
@@ -127,12 +125,12 @@ app.post('/presenca', async (req, res) => {
     }
 });
 
-// ROTA DE LOGIN CORRIGIDA E COMPLETA
+// ROTA DE LOGIN COM LÓGICA COMPLETA RESTAURADA
 app.post("/login", async (req, res) => {
     const { username, password } = req.body;
     console.log(`Backend: Tentativa de login para usuário: "${username}"`);
 
-    // 1. Tenta autenticar como administrador master
+    // 1. Autenticação do Administrador Master
     if (ADMIN_USERNAME && ADMIN_RI && 
         normalizeString(username) === normalizeString(ADMIN_USERNAME) && 
         password === ADMIN_RI) {
@@ -140,7 +138,7 @@ app.post("/login", async (req, res) => {
         return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: 'admin' });
     }
 
-    // 2. Se não for administrador, tenta autenticar como líder
+    // 2. Autenticação de Líder
     try {
         const responseData = await getMembrosWithCache();
         const membros = responseData.membros || [];
@@ -152,28 +150,53 @@ app.post("/login", async (req, res) => {
         const usernameNormalized = normalizeString(username);
         const passwordDigitado = String(password || '').trim();
 
-        // Lógica flexível para encontrar o membro pelo nome
         const membroEncontrado = membros.find(membro => 
             normalizeString(membro.Nome || '').includes(usernameNormalized)
         );
 
         if (membroEncontrado) {
             console.log(`Backend Login: Membro encontrado: ${membroEncontrado.Nome}`);
-            
+
             // Verifica a senha (RI)
             if (String(membroEncontrado.RI || '').trim() === passwordDigitado) {
-                const cargoMembro = normalizeString(membroEncontrado.Cargo || '');
                 
-                if (cargoMembro.includes('lider')) {
+                // --- INÍCIO DA VERIFICAÇÃO DE LIDERANÇA FLEXÍVEL ---
+                let isLeader = false;
+                const cargoMembro = normalizeString(membroEncontrado.Cargo || '');
+                const statusMembro = normalizeString(membroEncontrado.Status || '');
+
+                // Verificação 1: Pelo cargo ou status do próprio membro
+                if (cargoMembro.includes('lider') || statusMembro.includes('lider')) {
+                    isLeader = true;
+                    console.log(`Backend: ${membroEncontrado.Nome} é líder por cargo/status.`);
+                }
+
+                // Verificação 2: Se não for líder pelo cargo, verifica se é líder de algum grupo
+                if (!isLeader) {
+                    const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
+                    isLeader = membros.some(outroMembro => {
+                        const liderDoOutroMembro = normalizeString(outroMembro.Lider || '');
+                        // Verifica se o nome da pessoa que está logando aparece na coluna de líder de alguém
+                        return liderDoOutroMembro.includes(nomeDoMembroLogando);
+                    });
+                    if(isLeader) console.log(`Backend: ${membroEncontrado.Nome} é líder por estar na coluna 'Grupo Líder' de outro membro.`);
+                }
+                // --- FIM DA VERIFICAÇÃO DE LIDERANÇA FLEXÍVEL ---
+
+                if (isLeader) {
                     console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontrado.Nome}`);
                     return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontrado.Nome}!`, leaderName: membroEncontrado.Nome });
                 } else {
+                    console.log(`Backend: Usuário '${username}' encontrado, mas não possui permissão de líder.`);
                     return res.status(401).json({ success: false, message: 'Usuário não possui permissão de líder.' });
                 }
+
             } else {
+                console.log(`Backend: Senha (RI) inválida para o usuário: ${username}`);
                 return res.status(401).json({ success: false, message: 'Senha (RI) inválida.' });
             }
         } else {
+            console.log(`Backend: Usuário '${username}' não encontrado.`);
             return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
         }
 
