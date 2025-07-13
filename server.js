@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Versão com Login 100% CORRETO e ORIGINAL
+// Backend Node.js (server.js) - Versão com Login 100% Restaurado
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -73,10 +73,8 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
 
 async function getMembrosWithCache() {
     if (cachedMembros && (Date.now() - lastMembrosFetchTime < MEMBERS_CACHE_TTL)) {
-        console.log("Backend: Retornando membros do cache.");
         return { success: true, membros: cachedMembros };
     }
-    console.log("Backend: Buscando membros do Apps Script.");
     const data = await fetchFromAppsScript({ tipo: 'getMembros' });
     if (data.success) {
         cachedMembros = data.membros;
@@ -148,27 +146,26 @@ app.get('/get-faltas', async (req, res) => {
     }
 });
 
+
 // ROTA DE LOGIN COM A LÓGICA ORIGINAL E COMPLETA RESTAURADA
 app.post("/login", async (req, res) => {
     const { username, password } = req.body;
-    console.log(`Backend: Tentativa de login para usuário: "${username}"`);
-
+    
     if (ADMIN_USERNAME && ADMIN_RI && normalizeString(username) === normalizeString(ADMIN_USERNAME) && password === ADMIN_RI) {
-        console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
         return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: 'admin' });
     }
 
     try {
         const responseData = await getMembrosWithCache();
         const membros = responseData.membros || [];
-        if (membros.length === 0) return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar dados de membros.' });
+        if (membros.length === 0) return res.status(404).json({ success: false, message: 'Erro: Dados de membros não carregados.' });
 
         const usernameNormalized = normalizeString(username);
         const passwordDigitado = String(password || '').trim();
+        
         const membroEncontrado = membros.find(m => normalizeString(m.Nome || '').includes(usernameNormalized));
 
         if (membroEncontrado) {
-            console.log(`Backend Login: Membro encontrado: ${membroEncontrado.Nome}`);
             if (String(membroEncontrado.RI || '').trim() === passwordDigitado) {
                 let isLeader = false;
                 const cargoMembro = normalizeString(membroEncontrado.Cargo || '');
@@ -176,40 +173,30 @@ app.post("/login", async (req, res) => {
 
                 if (cargoMembro.includes('lider') || statusMembro.includes('lider')) {
                     isLeader = true;
-                    console.log(`Backend: ${membroEncontrado.Nome} é líder por cargo/status.`);
                 }
 
-                // SUA LÓGICA ORIGINAL E CORRETA DE VERIFICAÇÃO DE LÍDER DE GRUPO
                 if (!isLeader) {
                     const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
-                    console.log(`Verificação 2: Buscando se '${nomeDoMembroLogando}' é líder de algum grupo.`);
-
                     isLeader = membros.some(outroMembro => {
                         const liderNaPlanilhaCompleto = String(outroMembro.Lider || '').trim();
                         const congregacaoOutroMembro = String(outroMembro.Congregacao || '').trim();
                         
                         let nomeLiderExtraido = liderNaPlanilhaCompleto;
                         const prefixo = congregacaoOutroMembro ? `${congregacaoOutroMembro} | ` : '';
-                        if (prefixo && liderNaPlanilhaCompleto.startsWith(prefixo)) {
+                        if (prefixo && liderNaPlanilhaCompleto.toLowerCase().startsWith(prefixo.toLowerCase())) {
                             nomeLiderExtraido = liderNaPlanilhaCompleto.substring(prefixo.length).trim();
                         }
                         
                         const nomeLiderNormalizado = normalizeString(nomeLiderExtraido);
-
-                        console.log(`   Comparando: [Líder na planilha: '${nomeLiderNormalizado}'] vs [Usuário logando: '${nomeDoMembroLogando}']`);
-
-                        // A verificação correta: um nome começa com o outro para cobrir abreviações
-                        const match = nomeDoMembroLogando.startsWith(nomeLiderNormalizado) || nomeLiderNormalizado.startsWith(nomeDoMembroLogando);
-                        if(match) console.log('   --> MATCH!');
-                        return match;
+                        
+                        // Verificação de duas vias para abreviações
+                        return nomeDoMembroLogando.startsWith(nomeLiderNormalizado) || nomeLiderNormalizado.startsWith(nomeDoMembroLogando);
                     });
                 }
 
                 if (isLeader) {
-                    console.log(`Backend: Permissão de líder confirmada para ${membroEncontrado.Nome}.`);
                     return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontrado.Nome}!`, leaderName: membroEncontrado.Nome });
                 } else {
-                    console.log(`Backend: Usuário ${membroEncontrado.Nome} não possui permissão de líder.`);
                     return res.status(401).json({ success: false, message: 'Usuário não possui permissão de líder.' });
                 }
             } else {
@@ -226,6 +213,5 @@ app.post("/login", async (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
-    console.log(`CORS configurado para: ${FRONTEND_URL}`);
     getMembrosWithCache().catch(err => console.error("Erro ao pré-carregar cache de membros:", err.message));
 });
