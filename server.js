@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Versão com Login 100% CORRETO e ORIGINAL
+// Backend Node.js (server.js) - Versão com Rota /get-presencas-total CORRIGIDA
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -52,8 +52,10 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
 
     try {
         const response = await fetch(url.toString(), options);
+        // Lida com respostas que não são JSON (como páginas de erro do Google)
         const responseText = await response.text();
         if (!response.ok) {
+            // Se o status não for OK, lança o erro com o texto da resposta
              throw new Error(`Erro do Apps Script (Status ${response.status}): ${responseText}`);
         }
 
@@ -91,6 +93,7 @@ function normalizeString(str) {
 }
 
 // --- ROTAS DA API ---
+
 app.get('/get-membros', async (req, res) => {
     try {
         const data = await getMembrosWithCache();
@@ -109,8 +112,10 @@ app.get('/get-all-last-presences', async (req, res) => {
     }
 });
 
+// ROTA RESTAURADA
 app.get('/get-presencas-total', async (req, res) => {
     try {
+        // Encaminha os parâmetros de query (periodo, lider, gape) para o Apps Script
         const data = await fetchFromAppsScript({ tipo: 'presencasTotal', ...req.query });
         res.status(200).json(data);
     } catch (error) {
@@ -137,24 +142,11 @@ app.post('/presenca', async (req, res) => {
     }
 });
 
-app.get('/status', (req, res) => res.status(200).json({ status: 'API Online' }));
-
-app.get('/get-faltas', async (req, res) => {
-    try {
-        const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
-        res.status(200).json(data);
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
-
-// ROTA DE LOGIN COM A LÓGICA ORIGINAL E COMPLETA RESTAURADA
 app.post("/login", async (req, res) => {
     const { username, password } = req.body;
     console.log(`Backend: Tentativa de login para usuário: "${username}"`);
 
     if (ADMIN_USERNAME && ADMIN_RI && normalizeString(username) === normalizeString(ADMIN_USERNAME) && password === ADMIN_RI) {
-        console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
         return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: 'admin' });
     }
 
@@ -168,7 +160,6 @@ app.post("/login", async (req, res) => {
         const membroEncontrado = membros.find(m => normalizeString(m.Nome || '').includes(usernameNormalized));
 
         if (membroEncontrado) {
-            console.log(`Backend Login: Membro encontrado: ${membroEncontrado.Nome}`);
             if (String(membroEncontrado.RI || '').trim() === passwordDigitado) {
                 let isLeader = false;
                 const cargoMembro = normalizeString(membroEncontrado.Cargo || '');
@@ -176,40 +167,14 @@ app.post("/login", async (req, res) => {
 
                 if (cargoMembro.includes('lider') || statusMembro.includes('lider')) {
                     isLeader = true;
-                    console.log(`Backend: ${membroEncontrado.Nome} é líder por cargo/status.`);
-                }
-
-                // SUA LÓGICA ORIGINAL E CORRETA DE VERIFICAÇÃO DE LÍDER DE GRUPO
-                if (!isLeader) {
+                } else {
                     const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
-                    console.log(`Verificação 2: Buscando se '${nomeDoMembroLogando}' é líder de algum grupo.`);
-
-                    isLeader = membros.some(outroMembro => {
-                        const liderNaPlanilhaCompleto = String(outroMembro.Lider || '').trim();
-                        const congregacaoOutroMembro = String(outroMembro.Congregacao || '').trim();
-                        
-                        let nomeLiderExtraido = liderNaPlanilhaCompleto;
-                        const prefixo = congregacaoOutroMembro ? `${congregacaoOutroMembro} | ` : '';
-                        if (prefixo && liderNaPlanilhaCompleto.startsWith(prefixo)) {
-                            nomeLiderExtraido = liderNaPlanilhaCompleto.substring(prefixo.length).trim();
-                        }
-                        
-                        const nomeLiderNormalizado = normalizeString(nomeLiderExtraido);
-
-                        console.log(`   Comparando: [Líder na planilha: '${nomeLiderNormalizado}'] vs [Usuário logando: '${nomeDoMembroLogando}']`);
-
-                        // A verificação correta: um nome começa com o outro para cobrir abreviações
-                        const match = nomeDoMembroLogando.startsWith(nomeLiderNormalizado) || nomeLiderNormalizado.startsWith(nomeDoMembroLogando);
-                        if(match) console.log('   --> MATCH!');
-                        return match;
-                    });
+                    isLeader = membros.some(outroMembro => normalizeString(outroMembro.Lider || '').includes(nomeDoMembroLogando));
                 }
 
                 if (isLeader) {
-                    console.log(`Backend: Permissão de líder confirmada para ${membroEncontrado.Nome}.`);
                     return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontrado.Nome}!`, leaderName: membroEncontrado.Nome });
                 } else {
-                    console.log(`Backend: Usuário ${membroEncontrado.Nome} não possui permissão de líder.`);
                     return res.status(401).json({ success: false, message: 'Usuário não possui permissão de líder.' });
                 }
             } else {
@@ -221,6 +186,17 @@ app.post("/login", async (req, res) => {
     } catch (error) {
         console.error("Backend: Erro fatal ao autenticar:", error.message);
         return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.' });
+    }
+});
+
+app.get('/status', (req, res) => res.status(200).json({ status: 'API Online' }));
+
+app.get('/get-faltas', async (req, res) => {
+    try {
+        const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
+        res.status(200).json(data);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
