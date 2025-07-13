@@ -295,14 +295,19 @@ app.post("/login", async (req, res) => {
                         
                         console.log(`   Comparando (Líder na Planilha): '${nomeLiderExtraidoNormalized}' com (Usuário Logando): '${nomeDoMembroLogandoNormalized}' (do membro da linha: '${anyMember.Nome || 'N/A'}')`);
                         
-                        // Você pode tentar as alternativas aqui se a correspondência exata não funcionar:
-                        // return nomeLiderExtraidoNormalized.startsWith(nomeDoMembroLogandoNormalized);
-                        // return nomeLiderExtraidoNormalized.includes(nomeDoMembroLogandoNormalized);
-                        
-                        if (nomeLiderExtraidoNormalized === nomeDoMembroLogandoNormalized) {
-                            console.log(`   ### MATCH ENCONTRADO! '${nomeDoMembroLogandoNormalized}' é líder de grupo para '${anyMember.Nome}'.`);
+                        // --- CORREÇÃO APLICADA AQUI: Usando startsWith para flexibilizar a comparação do nome do líder ---
+                        // A comparação agora verifica se o nome do líder extraído da planilha
+                        // (ex: 'alessandro nasc') começa com o nome normalizado do membro logando
+                        // (ex: 'alessandro nascimento dos santos'), OU se o nome do membro logando
+                        // começa com o nome do líder extraído.
+                        // Isso cobre casos onde um é abreviação do outro.
+                        if (nomeLiderExtraidoNormalized.startsWith(nomeDoMembroLogandoNormalized) ||
+                            nomeDoMembroLogandoNormalized.startsWith(nomeLiderExtraidoNormalized)) {
+                            console.log(`   ### MATCH ENCONTRADO (FLEXÍVEL)! '${nomeDoMembroLogandoNormalized}' é líder de grupo para '${anyMember.Nome}'.`);
                             return true; // Encontrou uma correspondência, pode parar a iteração
                         }
+                        // --- FIM DA CORREÇÃO ---
+
                         return false; // Não encontrou correspondência nesta iteração
                     });
 
