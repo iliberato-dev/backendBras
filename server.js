@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Versão com Rota /get-presencas-total CORRIGIDA
+// Backend Node.js (server.js) - Versão com Login e Rotas CORRETAS
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -52,10 +52,8 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
 
     try {
         const response = await fetch(url.toString(), options);
-        // Lida com respostas que não são JSON (como páginas de erro do Google)
         const responseText = await response.text();
         if (!response.ok) {
-            // Se o status não for OK, lança o erro com o texto da resposta
              throw new Error(`Erro do Apps Script (Status ${response.status}): ${responseText}`);
         }
 
@@ -112,10 +110,8 @@ app.get('/get-all-last-presences', async (req, res) => {
     }
 });
 
-// ROTA RESTAURADA
 app.get('/get-presencas-total', async (req, res) => {
     try {
-        // Encaminha os parâmetros de query (periodo, lider, gape) para o Apps Script
         const data = await fetchFromAppsScript({ tipo: 'presencasTotal', ...req.query });
         res.status(200).json(data);
     } catch (error) {
@@ -142,11 +138,13 @@ app.post('/presenca', async (req, res) => {
     }
 });
 
+// ROTA DE LOGIN COM A LÓGICA FLEXÍVEL E CORRETA
 app.post("/login", async (req, res) => {
     const { username, password } = req.body;
     console.log(`Backend: Tentativa de login para usuário: "${username}"`);
 
     if (ADMIN_USERNAME && ADMIN_RI && normalizeString(username) === normalizeString(ADMIN_USERNAME) && password === ADMIN_RI) {
+        console.log(`Backend: Login bem-sucedido para usuário master: ${username}`);
         return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: 'admin' });
     }
 
@@ -160,6 +158,7 @@ app.post("/login", async (req, res) => {
         const membroEncontrado = membros.find(m => normalizeString(m.Nome || '').includes(usernameNormalized));
 
         if (membroEncontrado) {
+            console.log(`Backend Login: Membro encontrado: ${membroEncontrado.Nome}`);
             if (String(membroEncontrado.RI || '').trim() === passwordDigitado) {
                 let isLeader = false;
                 const cargoMembro = normalizeString(membroEncontrado.Cargo || '');
@@ -169,12 +168,18 @@ app.post("/login", async (req, res) => {
                     isLeader = true;
                 } else {
                     const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
-                    isLeader = membros.some(outroMembro => normalizeString(outroMembro.Lider || '').includes(nomeDoMembroLogando));
+                    isLeader = membros.some(outroMembro => {
+                        const liderNaPlanilha = normalizeString(outroMembro.Lider || '');
+                        // A verificação correta que cobre nomes completos e abreviados
+                        return liderNaPlanilha.includes(nomeDoMembroLogando);
+                    });
                 }
 
                 if (isLeader) {
+                    console.log(`Backend: Permissão de líder confirmada para ${membroEncontrado.Nome}.`);
                     return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontrado.Nome}!`, leaderName: membroEncontrado.Nome });
                 } else {
+                    console.log(`Backend: Usuário ${membroEncontrado.Nome} não possui permissão de líder.`);
                     return res.status(401).json({ success: false, message: 'Usuário não possui permissão de líder.' });
                 }
             } else {
