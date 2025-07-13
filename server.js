@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Versão com Login COMPLETO e CORRETO
+// Backend Node.js (server.js) - Versão com Login 100% CORRETO
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -88,6 +88,7 @@ function normalizeString(str) {
 
 // --- ROTAS DA API ---
 
+// ... (outras rotas como /get-membros, /presenca, etc. permanecem aqui) ...
 app.get('/get-membros', async (req, res) => {
     try {
         const data = await getMembrosWithCache();
@@ -96,7 +97,6 @@ app.get('/get-membros', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-
 app.get('/get-all-last-presences', async (req, res) => {
     try {
         const data = await fetchFromAppsScript({ tipo: 'getLastPresencesForAllMembers' });
@@ -105,7 +105,6 @@ app.get('/get-all-last-presences', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-
 app.get('/presences/:memberName', async (req, res) => {
     try {
         const { memberName } = req.params;
@@ -115,7 +114,6 @@ app.get('/presences/:memberName', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
-
 app.post('/presenca', async (req, res) => {
     try {
         const responseData = await fetchFromAppsScript({}, 'POST', req.body);
@@ -124,8 +122,18 @@ app.post('/presenca', async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 });
+app.get('/status', (req, res) => res.status(200).json({ status: 'API Online' }));
+app.get('/get-faltas', async (req, res) => {
+    try {
+        const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
+        res.status(200).json(data);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 
-// ROTA DE LOGIN COM LÓGICA COMPLETA RESTAURADA
+
+// ROTA DE LOGIN COM A LÓGICA ORIGINAL E FLEXÍVEL RESTAURADA
 app.post("/login", async (req, res) => {
     const { username, password } = req.body;
     console.log(`Backend: Tentativa de login para usuário: "${username}"`);
@@ -156,35 +164,40 @@ app.post("/login", async (req, res) => {
 
         if (membroEncontrado) {
             console.log(`Backend Login: Membro encontrado: ${membroEncontrado.Nome}`);
-
-            // Verifica a senha (RI)
+            
             if (String(membroEncontrado.RI || '').trim() === passwordDigitado) {
                 
-                // --- INÍCIO DA VERIFICAÇÃO DE LIDERANÇA FLEXÍVEL ---
                 let isLeader = false;
                 const cargoMembro = normalizeString(membroEncontrado.Cargo || '');
                 const statusMembro = normalizeString(membroEncontrado.Status || '');
 
-                // Verificação 1: Pelo cargo ou status do próprio membro
                 if (cargoMembro.includes('lider') || statusMembro.includes('lider')) {
                     isLeader = true;
                     console.log(`Backend: ${membroEncontrado.Nome} é líder por cargo/status.`);
                 }
 
-                // Verificação 2: Se não for líder pelo cargo, verifica se é líder de algum grupo
                 if (!isLeader) {
                     const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
+                    console.log(`Verificação 2: Buscando se '${nomeDoMembroLogando}' é líder de algum grupo.`);
+
                     isLeader = membros.some(outroMembro => {
-                        const liderDoOutroMembro = normalizeString(outroMembro.Lider || '');
-                        // Verifica se o nome da pessoa que está logando aparece na coluna de líder de alguém
-                        return liderDoOutroMembro.includes(nomeDoMembroLogando);
+                        const liderNaPlanilha = String(outroMembro.Lider || '').trim();
+                        const nomeLiderNormalizado = normalizeString(liderNaPlanilha);
+                        
+                        // LOG para depuração
+                        console.log(`   Comparando: [Líder na planilha: '${nomeLiderNormalizado}'] vs [Usuário logando: '${nomeDoMembroLogando}']`);
+
+                        // A verificação correta: um nome contém o outro para cobrir abreviações e nomes completos
+                        const match = nomeDoMembroLogando.includes(nomeLiderNormalizado) || nomeLiderNormalizado.includes(nomeDoMembroLogando);
+                        if(match) console.log('   --> MATCH!');
+                        return match;
                     });
-                    if(isLeader) console.log(`Backend: ${membroEncontrado.Nome} é líder por estar na coluna 'Grupo Líder' de outro membro.`);
+
+                    if(isLeader) console.log(`Backend: ${membroEncontrado.Nome} validado como líder por estar na coluna 'Grupo Líder'.`);
                 }
-                // --- FIM DA VERIFICAÇÃO DE LIDERANÇA FLEXÍVEL ---
 
                 if (isLeader) {
-                    console.log(`Backend: Login bem-sucedido para o líder: ${membroEncontrado.Nome}`);
+                    console.log(`Backend: Login BEM-SUCEDIDO para o líder: ${membroEncontrado.Nome}`);
                     return res.status(200).json({ success: true, message: `Login bem-sucedido, ${membroEncontrado.Nome}!`, leaderName: membroEncontrado.Nome });
                 } else {
                     console.log(`Backend: Usuário '${username}' encontrado, mas não possui permissão de líder.`);
@@ -206,18 +219,6 @@ app.post("/login", async (req, res) => {
     }
 });
 
-app.get('/status', (req, res) => {
-    res.status(200).json({ status: 'API Online' });
-});
-
-app.get('/get-faltas', async (req, res) => {
-    try {
-        const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
-        res.status(200).json(data);
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
 
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
