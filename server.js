@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Versão com Rota /get-presencas-total CORRIGIDA
+// Backend Node.js (server.js) - VERSÃO COMPLETA E FINAL
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -44,18 +44,13 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
     const options = {
         method: method,
         headers: { 'Content-Type': 'application/json' },
+        body: method !== 'GET' ? JSON.stringify(requestBody) : undefined,
     };
-
-    if (method !== 'GET') {
-        options.body = JSON.stringify(requestBody);
-    }
 
     try {
         const response = await fetch(url.toString(), options);
-        // Lida com respostas que não são JSON (como páginas de erro do Google)
         const responseText = await response.text();
         if (!response.ok) {
-            // Se o status não for OK, lança o erro com o texto da resposta
              throw new Error(`Erro do Apps Script (Status ${response.status}): ${responseText}`);
         }
 
@@ -65,9 +60,8 @@ async function fetchFromAppsScript(queryParams = {}, method = 'GET', body = null
         }
         return data;
     } catch (error) {
-        console.error(`Erro ao comunicar com Apps Script: ${error.message}`);
-        if (error.name === 'FetchError' || error.message.includes('invalid json')) {
-             throw new Error('Resposta inválida do Apps Script. O script pode ter travado.');
+        if (error instanceof SyntaxError) { // Captura especificamente erros de JSON
+            throw new Error('Resposta inválida do Apps Script (não é JSON). O script pode ter travado.');
         }
         throw error;
     }
@@ -112,10 +106,8 @@ app.get('/get-all-last-presences', async (req, res) => {
     }
 });
 
-// ROTA RESTAURADA
 app.get('/get-presencas-total', async (req, res) => {
     try {
-        // Encaminha os parâmetros de query (periodo, lider, gape) para o Apps Script
         const data = await fetchFromAppsScript({ tipo: 'presencasTotal', ...req.query });
         res.status(200).json(data);
     } catch (error) {
@@ -142,21 +134,32 @@ app.post('/presenca', async (req, res) => {
     }
 });
 
-app.post("/login", async (req, res) => {
-    const { username, password } = req.body;
-    console.log(`Backend: Tentativa de login para usuário: "${username}"`);
+app.get('/status', (req, res) => res.status(200).json({ status: 'API Online' }));
 
-    if (ADMIN_USERNAME && ADMIN_RI && normalizeString(username) === normalizeString(ADMIN_USERNAME) && password === ADMIN_RI) {
-        return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: 'admin' });
-    }
-
+app.get('/get-faltas', async (req, res) => {
     try {
+        const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
+        res.status(200).json(data);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+app.post("/login", async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        
+        if (ADMIN_USERNAME && ADMIN_RI && normalizeString(username) === normalizeString(ADMIN_USERNAME) && password === ADMIN_RI) {
+            return res.status(200).json({ success: true, message: 'Login bem-sucedido como Administrador!', leaderName: 'admin' });
+        }
+
         const responseData = await getMembrosWithCache();
         const membros = responseData.membros || [];
-        if (membros.length === 0) return res.status(404).json({ success: false, message: 'Erro: Não foi possível carregar dados de membros.' });
+        if (membros.length === 0) return res.status(404).json({ success: false, message: 'Erro: Dados de membros não carregados.' });
 
         const usernameNormalized = normalizeString(username);
         const passwordDigitado = String(password || '').trim();
+        
         const membroEncontrado = membros.find(m => normalizeString(m.Nome || '').includes(usernameNormalized));
 
         if (membroEncontrado) {
@@ -167,9 +170,24 @@ app.post("/login", async (req, res) => {
 
                 if (cargoMembro.includes('lider') || statusMembro.includes('lider')) {
                     isLeader = true;
-                } else {
+                }
+
+                if (!isLeader) {
                     const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
-                    isLeader = membros.some(outroMembro => normalizeString(outroMembro.Lider || '').includes(nomeDoMembroLogando));
+                    isLeader = membros.some(outroMembro => {
+                        const liderNaPlanilhaCompleto = String(outroMembro.Lider || '').trim();
+                        const congregacaoOutroMembro = String(outroMembro.Congregacao || '').trim();
+                        
+                        let nomeLiderExtraido = liderNaPlanilhaCompleto;
+                        const prefixo = congregacaoOutroMembro ? `${congregacaoOutroMembro} | ` : '';
+                        if (prefixo && liderNaPlanilhaCompleto.toLowerCase().startsWith(prefixo.toLowerCase())) {
+                            nomeLiderExtraido = liderNaPlanilhaCompleto.substring(prefixo.length).trim();
+                        }
+                        
+                        const nomeLiderNormalizado = normalizeString(nomeLiderExtraido);
+                        
+                        return nomeDoMembroLogando.startsWith(nomeLiderNormalizado) || nomeLiderNormalizado.startsWith(nomeDoMembroLogando);
+                    });
                 }
 
                 if (isLeader) {
@@ -184,24 +202,12 @@ app.post("/login", async (req, res) => {
             return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
         }
     } catch (error) {
-        console.error("Backend: Erro fatal ao autenticar:", error.message);
-        return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.' });
-    }
-});
-
-app.get('/status', (req, res) => res.status(200).json({ status: 'API Online' }));
-
-app.get('/get-faltas', async (req, res) => {
-    try {
-        const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
-        res.status(200).json(data);
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("ERRO FATAL NA ROTA DE LOGIN:", error);
+        return res.status(500).json({ success: false, message: `Erro interno do servidor: ${error.message}` });
     }
 });
 
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
-    console.log(`CORS configurado para: ${FRONTEND_URL}`);
     getMembrosWithCache().catch(err => console.error("Erro ao pré-carregar cache de membros:", err.message));
 });
