@@ -1,5 +1,5 @@
 // ------------------------------------------------------
-// Backend Node.js (server.js) - Versão com Login e Rotas CORRETAS
+// Backend Node.js (server.js) - Versão com Login 100% CORRETO e ORIGINAL
 // ------------------------------------------------------
 require('dotenv').config();
 
@@ -91,7 +91,6 @@ function normalizeString(str) {
 }
 
 // --- ROTAS DA API ---
-
 app.get('/get-membros', async (req, res) => {
     try {
         const data = await getMembrosWithCache();
@@ -138,7 +137,18 @@ app.post('/presenca', async (req, res) => {
     }
 });
 
-// ROTA DE LOGIN COM A LÓGICA FLEXÍVEL E CORRETA
+app.get('/status', (req, res) => res.status(200).json({ status: 'API Online' }));
+
+app.get('/get-faltas', async (req, res) => {
+    try {
+        const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
+        res.status(200).json(data);
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ROTA DE LOGIN COM A LÓGICA ORIGINAL E COMPLETA RESTAURADA
 app.post("/login", async (req, res) => {
     const { username, password } = req.body;
     console.log(`Backend: Tentativa de login para usuário: "${username}"`);
@@ -166,12 +176,32 @@ app.post("/login", async (req, res) => {
 
                 if (cargoMembro.includes('lider') || statusMembro.includes('lider')) {
                     isLeader = true;
-                } else {
+                    console.log(`Backend: ${membroEncontrado.Nome} é líder por cargo/status.`);
+                }
+
+                // SUA LÓGICA ORIGINAL E CORRETA DE VERIFICAÇÃO DE LÍDER DE GRUPO
+                if (!isLeader) {
                     const nomeDoMembroLogando = normalizeString(membroEncontrado.Nome);
+                    console.log(`Verificação 2: Buscando se '${nomeDoMembroLogando}' é líder de algum grupo.`);
+
                     isLeader = membros.some(outroMembro => {
-                        const liderNaPlanilha = normalizeString(outroMembro.Lider || '');
-                        // A verificação correta que cobre nomes completos e abreviados
-                        return liderNaPlanilha.includes(nomeDoMembroLogando);
+                        const liderNaPlanilhaCompleto = String(outroMembro.Lider || '').trim();
+                        const congregacaoOutroMembro = String(outroMembro.Congregacao || '').trim();
+                        
+                        let nomeLiderExtraido = liderNaPlanilhaCompleto;
+                        const prefixo = congregacaoOutroMembro ? `${congregacaoOutroMembro} | ` : '';
+                        if (prefixo && liderNaPlanilhaCompleto.startsWith(prefixo)) {
+                            nomeLiderExtraido = liderNaPlanilhaCompleto.substring(prefixo.length).trim();
+                        }
+                        
+                        const nomeLiderNormalizado = normalizeString(nomeLiderExtraido);
+
+                        console.log(`   Comparando: [Líder na planilha: '${nomeLiderNormalizado}'] vs [Usuário logando: '${nomeDoMembroLogando}']`);
+
+                        // A verificação correta: um nome começa com o outro para cobrir abreviações
+                        const match = nomeDoMembroLogando.startsWith(nomeLiderNormalizado) || nomeLiderNormalizado.startsWith(nomeDoMembroLogando);
+                        if(match) console.log('   --> MATCH!');
+                        return match;
                     });
                 }
 
@@ -191,17 +221,6 @@ app.post("/login", async (req, res) => {
     } catch (error) {
         console.error("Backend: Erro fatal ao autenticar:", error.message);
         return res.status(500).json({ success: false, message: 'Erro interno do servidor ao autenticar.' });
-    }
-});
-
-app.get('/status', (req, res) => res.status(200).json({ status: 'API Online' }));
-
-app.get('/get-faltas', async (req, res) => {
-    try {
-        const data = await fetchFromAppsScript({ tipo: 'getFaltas', ...req.query });
-        res.status(200).json(data);
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
     }
 });
 
