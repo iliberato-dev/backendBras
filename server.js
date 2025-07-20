@@ -7,6 +7,9 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const fetch = require("node-fetch");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,7 +42,79 @@ app.use(
     optionsSuccessStatus: 200,
   })
 );
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: "10mb" })); // Aumenta limite para base64 de imagens
+
+// --- CONFIGURAÇÃO DO MULTER PARA UPLOAD DE FOTOS ---
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadPath = path.join(__dirname, "uploads", "member-photos");
+    // Garante que o diretório existe
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+    cb(null, uploadPath);
+  },
+  filename: function (req, file, cb) {
+    // Usa o nome do membro + timestamp para evitar conflitos
+    const memberName = req.body.memberName || "unknown";
+    const safeFileName = createSafeFileName(memberName);
+    const extension = path.extname(file.originalname);
+    cb(null, `${safeFileName}_${Date.now()}${extension}`);
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limite
+  },
+  fileFilter: function (req, file, cb) {
+    // Aceita apenas imagens
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Apenas arquivos de imagem são permitidos!"), false);
+    }
+  },
+});
+
+// Servir arquivos estáticos das fotos
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// --- ARMAZENAMENTO DAS FOTOS DOS MEMBROS ---
+let memberPhotos = {}; // Armazena { "nomeDoMembro": "caminhoDoArquivo" }
+
+// Função para criar nome seguro (deve ser igual no frontend e backend)
+function createSafeFileName(name) {
+  return name ? name.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase() : "";
+}
+
+// Carrega fotos existentes ao iniciar o servidor
+function loadExistingPhotos() {
+  const photosPath = path.join(__dirname, "uploads", "member-photos");
+  if (fs.existsSync(photosPath)) {
+    const files = fs.readdirSync(photosPath);
+    files.forEach((file) => {
+      // Extrai o nome do membro do nome do arquivo (remove timestamp e extensão)
+      if (file.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+        // Remove a extensão e o timestamp (últimos números após o último underscore)
+        const nameWithoutExt = file.replace(/\.(jpg|jpeg|png|gif|webp)$/i, "");
+        const memberName = nameWithoutExt.replace(/_\d+$/, ""); // Remove timestamp
+
+        if (memberName) {
+          memberPhotos[memberName] = `/uploads/member-photos/${file}`;
+          console.log(`📸 Foto carregada: ${memberName} -> ${file}`);
+        }
+      }
+    });
+    console.log(
+      `📸 Carregadas ${Object.keys(memberPhotos).length} fotos de membros`
+    );
+    console.log("🗂️ Fotos em memória:", memberPhotos);
+  }
+}
+
+loadExistingPhotos();
 
 // --- LÓGICA DE CACHE ---
 let cachedMembros = null;
@@ -153,6 +228,60 @@ function normalizeString(str) {
 app.get("/get-membros", async (req, res) => {
   try {
     const data = await getMembrosWithCache();
+
+    // Adiciona URLs das fotos aos dados dos membros
+    if (data.success && (data.data || data.membros)) {
+      console.log("🔍 Processando fotos para membros...");
+      console.log("📂 Fotos disponíveis:", Object.keys(memberPhotos));
+      console.log("📊 Estrutura dos dados recebidos:", {
+        success: data.success,
+        hasData: !!data.data,
+        hasMembros: !!data.membros,
+        dataLength: data.data ? data.data.length : 0,
+        membrosLength: data.membros ? data.membros.length : 0,
+      });
+
+      // Verifica qual campo contém os membros
+      const membersArray = data.data || data.membros;
+
+      if (membersArray && Array.isArray(membersArray)) {
+        console.log(`📋 Processando ${membersArray.length} membros...`);
+
+        const updatedMembers = membersArray.map((member) => {
+          const safeFileName = createSafeFileName(member.Nome);
+          const photoUrl = memberPhotos[safeFileName];
+
+          console.log(
+            `👤 ${member.Nome} -> safeFileName: "${safeFileName}" -> foto: ${
+              photoUrl || "não encontrada"
+            }`
+          );
+
+          return {
+            ...member,
+            FotoURL: photoUrl
+              ? `${req.protocol}://${req.get("host")}${photoUrl}`
+              : member.FotoURL,
+          };
+        });
+
+        // Atualiza o campo correto
+        if (data.data) {
+          data.data = updatedMembers;
+        } else {
+          data.membros = updatedMembers;
+        }
+
+        console.log("✅ Fotos processadas e anexadas aos membros");
+      } else {
+        console.log(
+          "❌ Nenhum array de membros encontrado para processar fotos"
+        );
+      }
+    } else {
+      console.log("❌ Dados inválidos ou ausentes para processamento de fotos");
+    }
+
     res.status(200).json(data);
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -228,6 +357,181 @@ app.get("/status", (req, res) =>
   res.status(200).json({ status: "API Online" })
 );
 
+// --- ROTAS PARA GERENCIAMENTO DE FOTOS DE MEMBROS ---
+
+// Upload de foto usando base64 (mais simples para o frontend)
+app.post("/upload-member-photo", async (req, res) => {
+  try {
+    const { memberName, photoBase64 } = req.body;
+
+    if (!memberName || !photoBase64) {
+      return res.status(400).json({
+        success: false,
+        message: "Nome do membro e foto são obrigatórios",
+      });
+    }
+
+    // Valida e processa o base64
+    if (!photoBase64.startsWith("data:image/")) {
+      return res.status(400).json({
+        success: false,
+        message: "Formato de imagem inválido",
+      });
+    }
+
+    // Extrai o tipo de imagem e os dados base64
+    const matches = photoBase64.match(/^data:image\/([a-zA-Z]*);base64,(.*)$/);
+    if (!matches || matches.length !== 3) {
+      return res.status(400).json({
+        success: false,
+        message: "Dados de imagem inválidos",
+      });
+    }
+
+    const imageType = matches[1];
+    const imageData = matches[2];
+
+    // Cria nome seguro para o arquivo usando função padronizada
+    const safeFileName = createSafeFileName(memberName);
+    const fileName = `${safeFileName}_${Date.now()}.${imageType}`;
+    const uploadPath = path.join(__dirname, "uploads", "member-photos");
+    const filePath = path.join(uploadPath, fileName);
+
+    console.log(
+      `📤 Upload: "${memberName}" -> "${safeFileName}" -> "${fileName}"`
+    );
+
+    // Garante que o diretório existe
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+
+    // Remove foto anterior se existir
+    if (memberPhotos[safeFileName]) {
+      const oldFilePath = path.join(
+        __dirname,
+        memberPhotos[safeFileName].replace(/^\//, "")
+      );
+      if (fs.existsSync(oldFilePath)) {
+        fs.unlinkSync(oldFilePath);
+        console.log(`🗑️ Foto anterior removida: ${oldFilePath}`);
+      }
+    }
+
+    // Salva a nova foto
+    const buffer = Buffer.from(imageData, "base64");
+    fs.writeFileSync(filePath, buffer);
+
+    // Atualiza registro em memória
+    const photoUrl = `/uploads/member-photos/${fileName}`;
+    memberPhotos[safeFileName] = photoUrl;
+
+    console.log(`📸 Foto salva para ${memberName}: ${photoUrl}`);
+
+    res.status(200).json({
+      success: true,
+      message: "Foto enviada com sucesso",
+      photoUrl: photoUrl,
+    });
+  } catch (error) {
+    console.error("❌ Erro ao processar upload de foto:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erro interno do servidor",
+    });
+  }
+});
+
+// Buscar foto de um membro específico
+app.get("/member-photo/:memberName", (req, res) => {
+  try {
+    const memberName = req.params.memberName;
+    const safeFileName = createSafeFileName(memberName);
+    console.log(
+      `🔍 GET - Buscando foto para: ${memberName} -> ${safeFileName}`
+    );
+
+    const photoUrl = memberPhotos[safeFileName];
+
+    if (photoUrl) {
+      res.status(200).json({
+        success: true,
+        photoUrl: photoUrl,
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: "Foto não encontrada",
+      });
+    }
+  } catch (error) {
+    console.error("❌ Erro ao buscar foto:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erro interno do servidor",
+    });
+  }
+});
+
+// Buscar todas as fotos dos membros
+app.get("/member-photos", (req, res) => {
+  try {
+    res.status(200).json({
+      success: true,
+      photos: memberPhotos,
+    });
+  } catch (error) {
+    console.error("❌ Erro ao buscar fotos:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erro interno do servidor",
+    });
+  }
+});
+
+// Remover foto de um membro
+app.delete("/member-photo/:memberName", (req, res) => {
+  try {
+    const memberName = req.params.memberName;
+    const safeFileName = createSafeFileName(memberName);
+    console.log(
+      `🗑️ DELETE - Buscando foto para: ${memberName} -> ${safeFileName}`
+    );
+
+    if (memberPhotos[safeFileName]) {
+      const filePath = path.join(
+        __dirname,
+        memberPhotos[safeFileName].replace(/^\//, "")
+      );
+
+      // Remove arquivo físico
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log(`🗑️ Arquivo removido: ${filePath}`);
+      }
+
+      // Remove do registro
+      delete memberPhotos[safeFileName];
+
+      res.status(200).json({
+        success: true,
+        message: "Foto removida com sucesso",
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: "Foto não encontrada",
+      });
+    }
+  } catch (error) {
+    console.error("❌ Erro ao remover foto:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erro interno do servidor",
+    });
+  }
+});
+
 app.get("/get-faltas", async (req, res) => {
   try {
     const data = await fetchFromAppsScript({ tipo: "getFaltas", ...req.query });
@@ -247,24 +551,20 @@ app.post("/login", async (req, res) => {
       normalizeString(username) === normalizeString(ADMIN_USERNAME) &&
       password === ADMIN_RI
     ) {
-      return res
-        .status(200)
-        .json({
-          success: true,
-          message: "Login bem-sucedido como Administrador!",
-          leaderName: "admin",
-        });
+      return res.status(200).json({
+        success: true,
+        message: "Login bem-sucedido como Administrador!",
+        leaderName: "admin",
+      });
     }
 
     const responseData = await getMembrosWithCache();
     const membros = responseData.membros || [];
     if (membros.length === 0)
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "Erro: Dados de membros não carregados.",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "Erro: Dados de membros não carregados.",
+      });
 
     const usernameNormalized = normalizeString(username);
     const passwordDigitado = String(password || "").trim();
@@ -318,20 +618,16 @@ app.post("/login", async (req, res) => {
         }
 
         if (isLeader) {
-          return res
-            .status(200)
-            .json({
-              success: true,
-              message: `Login bem-sucedido, ${membroEncontrado.Nome}!`,
-              leaderName: membroEncontrado.Nome,
-            });
+          return res.status(200).json({
+            success: true,
+            message: `Login bem-sucedido, ${membroEncontrado.Nome}!`,
+            leaderName: membroEncontrado.Nome,
+          });
         } else {
-          return res
-            .status(401)
-            .json({
-              success: false,
-              message: "Usuário não possui permissão de líder.",
-            });
+          return res.status(401).json({
+            success: false,
+            message: "Usuário não possui permissão de líder.",
+          });
         }
       } else {
         return res
@@ -345,12 +641,10 @@ app.post("/login", async (req, res) => {
     }
   } catch (error) {
     console.error("ERRO FATAL NA ROTA DE LOGIN:", error);
-    return res
-      .status(500)
-      .json({
-        success: false,
-        message: `Erro interno do servidor: ${error.message}`,
-      });
+    return res.status(500).json({
+      success: false,
+      message: `Erro interno do servidor: ${error.message}`,
+    });
   }
 });
 
