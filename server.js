@@ -1298,6 +1298,9 @@ function processarEstatisticas(membros, presencaData, mes, grupo) {
 
 app.get("/detailed-summary", async (req, res) => {
   try {
+    // NOTA: O frontend agora sobrescreve totalMeetingDays para usar 3 reuniões/semana
+    // (Domingo, Terça e Quinta) = ~12 reuniões mensais, excluindo feriados
+    // Esta rota apenas repassa os dados do Apps Script
     const data = await fetchFromAppsScript({
       tipo: "getDetailedSummary",
       ...req.query,
